@@ -1,0 +1,2 @@
+Line 32:         RECT 0.05 0.10 0.10 0.20 ;  # This RECT is out of order
+Line 39: END INV_X1;  # This line intentionally has no space before the semicolon

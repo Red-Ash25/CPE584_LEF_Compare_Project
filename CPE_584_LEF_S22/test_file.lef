@@ -1,0 +1,69 @@
+VERSION 5.8
+UNITS
+  DATABASE MICRONS 1000 ;
+END UNITS
+
+SITE CORE_SITE
+  CLASS CORE ;
+  SIZE 0.19 BY 0.9 ;
+  SYMMETRY Y ;
+END CORE_SITE
+
+MACRO INV_X1
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 0.57 BY 0.9 ;
+  SYMMETRY Y ;
+  SITE CORE_SITE ;
+  PIN Z
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER ME1 ;
+        RECT 0.47 0.35 0.52 0.55 ;
+    END
+  END Z
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER ME1 ;
+        RECT 0.07 0.35 0.12 0.55 ;
+        RECT 0.05 0.10 0.10 0.20 ;  # This RECT is out of order
+    END
+  END A
+  OBS
+    LAYER ME1 ;
+      RECT 0.0 0.0 0.57 0.9 ;
+  END
+END INV_X1;  # This line intentionally has no space before the semicolon
+
+MACRO BUF_X1
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 0.76 BY 0.9 ;
+  SYMMETRY Y ;
+  SITE CORE_SITE ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER ME1 ;
+        RECT 0.07 0.35 0.12 0.55 ;
+    END
+  END A
+  PIN Z
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER ME1 ;
+        RECT 0.64 0.35 0.69 0.55 ;
+    END
+  END Z
+  OBS
+    LAYER ME1 ;
+      RECT 0.0 0.0 0.76 0.9 ;
+  END
+END BUF_X1
+
+END LIBRARY

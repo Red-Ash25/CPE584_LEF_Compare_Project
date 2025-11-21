@@ -270,43 +270,42 @@ class Cell
         end
 				split_line = line.split()
 				split_line[0] = split_line[0].upcase()
+
         if split_line[0] == "PROPERTY"
           @keywordProperties.push(line)
         else
-          # TODO: should be case split_line[0]
-          if split_line[0] == "ORIGIN"
+          @properties.push(line)
+          
+          # TODO: should be case split_line[0] (This is now complete)
+          case split_line[0]
+          when "ORIGIN"
             origin_found = true
             if split_line[1] != "0" || split_line[2] != "0" then
               @errors[:strange_origin].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
             end
-          end
-          if split_line[0] == "FOREIGN"
+          when "FOREIGN"
             if split_line[2] != "0" || split_line[3] != "0" then
               @errors[:strange_foreign].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
             end
-          end
-          if split_line[0] == "CLASS"
+          when "CLASS"
             class_found = true
             Cell::register_property(@@classes_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SIZE"
+          when "SIZE"
             size_found = true
-          end
-          if split_line[0] == "SYMMETRY"
+          when "SYMMETRY"
             symmetry_found = true
             Cell::register_property(@@symmetries_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SITE"
+          when "SITE"
             site_found = true
             Cell::register_property(@@sites_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SOURCE"
+          when "SOURCE"
             source_found = true
-          end
-          @properties.push(line)
-          if !(@@PropertyOrder.include? line.split[0].upcase)
-            error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
-            @errors[:unknown_cell_property].push error_msg
+          else
+            # Handle unknown properties
+            if !(@@PropertyOrder.include? line.split[0].upcase)
+              error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
+              @errors[:unknown_cell_property].push error_msg
+            end
           end
         end
         get_next_line(file, index)
@@ -1363,71 +1362,57 @@ def main(opts)
           error_file_opened = true
         end
         error_description = "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed.\n"
-        # TODO: should be case error_type
-        if error_type == :line_ending_semicolons
+        # TODO: should be case error_type (This is now complete)
+        
+        case error_type
+        when :line_ending_semicolons
           error_description += "Warning: The following lines have improper lack of space before the ending semicolon.\n"
-          error_description += "These issues are fixed in " + output_filename + ".\n"
-        elsif error_type == :strange_origin
-          # error_description += "Warning: The following cells have an unusual ORIGIN specified.\n"
-          # ^ strange counts number of occurances, under a certain amount is strange. That is not descriptive nor helpful for testing
+          error_description += 
+          "These issues are fixed in " + output_filename + ".\n"
+
+        #These 'strange' errors are intentionally skipped
+        when :strange_origin, :strange_foreign, :strange_class, :strange_site, :strange_symmetry, :strange_direction, :strange_use
           next
-        elsif error_type == :strange_foreign
-          # error_description += "Warning: The following cells have an unusual FOREIGN specified.\n"
-          next
-        elsif error_type == :missing_property_definitions
+
+        when :missing_property_definitions
           error_description += "Warning: The LEF file does not have any PROPERTYDEFINITIONS listed at the start of the file.\n"
-        elsif error_type == :missing_end_library_token
+        when :missing_end_library_token
           error_description += "Error: The LEF file does not contain an 'END LIBRARY' delimiter.\n"
-        elsif error_type == :mangled_cell_end
+        when :mangled_cell_end
           error_description += "Error: The following cells have non-matching end delimiters.\n"
-        elsif error_type == :missing_cell_end
+        when :missing_cell_end
           error_description += "Error: The following cells are missing end delimiters.\n"
-        elsif error_type == :unknown_pin_property
+        when :unknown_pin_property
           error_description += "Warning: The following lines specify an unrecognized pin property.\n"
-        elsif error_type == :unknown_cell_property
+        when :unknown_cell_property
           error_description += "Warning: The following lines specify an unrecognized cell property.\n"
-        elsif error_type == :unknown_layer
+        when :unknown_layer
           error_description += "Warning: The following lines defined unrecognized layers.\n"
-        elsif error_type == :missing_origin
+        when :missing_origin
           error_description += "Error: The following cells do not have an ORIGIN defined.\n"
-        elsif error_type == :missing_class
+        when :missing_class
           error_description += "Error: The following cells do not have a CLASS defined.\n"
-        elsif error_type == :strange_class
-          # error_description += "Warning: The following cells have an unusual CLASS defined.\n"
-          next
-        elsif error_type == :missing_site
+        when :missing_site
           error_description += "Error: The following cells do not have a SITE defined.\n"
-        elsif error_type == :strange_site
-          # error_description += "Warning: The following cells have an unusual SITE defined.\n"
-          next
-        elsif error_type == :missing_size
+        when :missing_size
           error_description += "Error: The following cells do not have a SIZE defined.\n"
-        elsif error_type == :missing_symmetry
+        when :missing_symmetry
           error_description += "Error: The following cells do not have a SYMMETRY defined.\n"
-        elsif error_type == :strange_symmetry
-          # error_description += "Warning: The following cells have an unusual SYMMETRY defined.\n"
-          next
-        elsif error_type == :missing_direction
+        when :missing_direction
           error_description += "Error: The following pins do not have a DIRECTION defined.\n"
-        elsif error_type == :strange_direction
-          # error_description += "Warning: The following pins have an unusual DIRECTION defined.\n"
-          next
-        elsif error_type == :missing_use
+        when :missing_use
           error_description += "Error: The following pins do not have a USE defined.\n"
-        elsif error_type == :strange_use
-          # error_description += "Warning: The following pins have an unusual USE defined.\n"
-          next
-        elsif error_type == :lef_missing_cell
+        when :lef_missing_cell
           error_description += "Error: The following cells were found in Liberty files, but not in the LEF file.\n"
-        elsif error_type == :lef_missing_pin
+        when :lef_missing_pin
           error_description += "Error: The following cells had the following pins defined in Liberty files, but not in the LEF file.\n"
-        elsif error_type == :liberty_missing_cell
+        when :liberty_missing_cell
           error_description += "Error: The following cells were found in the LEF file, but not in the following Liberty files.\n"
-        elsif error_type == :liberty_missing_pin
+        when :liberty_missing_pin
           error_description += "Error: The following cells had the following pins defined in the LEF file, but not in the following Liberty files.\n"
-        elsif error_type == :area_mismatch
+        when :area_mismatch
           error_description += "Error: The following cells had a SIZE property that was inconsistent with the AREA stated in the following Liberty files.\n"
-        elsif error_type == :liberty_incorrect_pin_property
+        when :liberty_incorrect_pin_property
           error_description += "Error: The following cells have mismtached values between LIB and LEF.\n" 
         end
         
