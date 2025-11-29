@@ -634,18 +634,19 @@ class Layer
 end
 
 class LayerCollection
-
   @@layer_order_selected = "s40"
   @@layer_orders = Hash.new
   # TODO: make techfile or TLEF required for Layer checks, these lists
   @@layer_orders["s40"] = Array["LP_HVTP","LP_HVTN","CONT", "ME1", "VI1", "ME2","VI2","ME3"]
   @@layer_orders["abc"] = Array["met2", "via", "met1", "mcon", "li1", "nwell", "pwell"]
 
-  attr_reader :layers
+  attr_reader :layers, :vias  # ADD ':vias' here
+  
   # Either an Obstruction or a Port.
   def self.start_line?(line)
     return line.match(/^\s*(OBS)|(PORT)/)
   end
+  
   def self.layer_order=(new_order)
     if @@layer_orders[new_order].nil?
       puts "Warning: Layer order '#{new_order}' is not defined.\n"
@@ -654,9 +655,11 @@ class LayerCollection
       @@layer_order_selected = new_order
     end
   end
+  
   def self.layer_order()
     return @@layer_order_selected
   end
+
   #
   # changes layer orders in the event that a tlef/tf file is found, otherwise
   # uses the default.
@@ -670,6 +673,7 @@ class LayerCollection
   def self.recognized_layer?(name)
     return @@layer_orders[@@layer_order_selected].include?(name.split()[0])
   end
+  
   def initialize(file, index, errors)
     line = get_current_line(file, index)
     if !LayerCollection::start_line?(line)
@@ -677,36 +681,124 @@ class LayerCollection
     end
     @start_line = line
     @layers = Hash.new
+    @vias = Array.new  # Store VIA statements
     @errors = errors
     line = get_next_line(file, index)
-    while(Layer::start_line?(line))
-      new_layer = Layer.new(file, index, errors)
-      @layers[new_layer.name] = new_layer
+    
+    while(Layer::start_line?(line) || via_start_line?(line))
+      if Layer::start_line?(line)
+        new_layer = Layer.new(file, index, errors)
+        @layers[new_layer.name] = new_layer
+      elsif via_start_line?(line)
+        # Parse VIA statement
+        new_via = parse_via(line, file, index, errors)
+        @vias.push(new_via)
+        line = get_next_line(file, index)
+      end
       line = get_current_line(file, index)
     end
     @end_line = line
     get_next_line(file, index)
+    
+    # Check that all VIAS have associated OBS layers
+    check_via_obs_associations()
   end
+  
+  def via_start_line?(line)
+    return line.match(/^\s*VIA/)
+  end
+  
+  def parse_via(line, file, index, errors)
+    # Store the raw VIA line for now
+    # Format: VIA [MASK maskNum] pt viaName ;
+    via_line = line.dup
+    
+    # Extract via name for checking associations
+    via_name = extract_via_name(line)
+    
+    return {
+      'line' => via_line,
+      'name' => via_name,
+      'line_num' => index.value + 1
+    }
+  end
+  
+  def extract_via_name(line)
+    # VIA statement format: VIA [MASK maskNum] pt viaName ;
+    # Extract the via name which should be the last word before semicolon
+    parts = line.split
+    via_name = nil
+    
+    # Look for the via name (should be before the semicolon)
+    parts.each_with_index do |part, i|
+      if part == ';' && i > 0
+        via_name = parts[i-1]
+        break
+      end
+    end
+    
+    # Fallback: if no semicolon found, take the last non-empty word
+    via_name ||= parts.reject { |p| p.empty? }[-1]
+    
+    return via_name
+  end
+  
+  def check_via_obs_associations
+    # Check if there are VIAS but no LAYERS in this OBS section
+    if !@vias.empty? && @layers.empty?
+      @vias.each do |via|
+        error_msg = "Line #{via['line_num']}: VIA '#{via['name']}' has no associated OBS layers\n"
+        @errors[:via_missing_obs_layer].push(error_msg)
+      end
+    end
+    
+    # Additional check: if there are layers, verify they are appropriate for the VIAS
+    # This could be expanded based on specific design rules
+    if !@vias.empty? && !@layers.empty?
+      # Check if layers are valid for VIAS (you might want to add specific rules here)
+      valid_via_layers = ['metal1', 'metal2', 'metal3', 'via1', 'via2'] # Example valid layers
+      @layers.each_key do |layer_name|
+        if !valid_via_layers.include?(layer_name.downcase)
+          @vias.each do |via|
+            warning_msg = "Line #{via['line_num']}: VIA '#{via['name']}' may have inappropriate layer '#{layer_name}'\n"
+            # You might want to add this to a different warning category
+          end
+        end
+      end
+    end
+  end
+  
   def sort!()
     @layers.each_value{|layer| layer.sort!()}
+    # VIAS don't typically need sorting as they're single statements
   end
+  
   def print(outFile)
     outFile.print @start_line
     sorted_layer_names = @layers.keys().sort{ |a, b| layer_name_sort(a, b) }
     sorted_layer_names.each do |key|
       @layers[key].print(outFile)
     end
+    
+    # Print VIA statements
+    @vias.each do |via|
+      outFile.print via['line']
+    end
+    
     outFile.print @end_line
   end
+  
   def [](ind)
     return @layers[ind]
   end
+  
   def layer_name_sort(a, b)
     layer_order = @@layer_orders[@@layer_order_selected]
     a_key = a.split()[0]
     b_key = b.split()[0]
     return sort_by_property_list(layer_order, a_key, b_key, a<=>b)
   end
+  
   def compare_to(other_collection)
     these_keys = @layers.keys().sort()
     those_keys = other_collection.layers().keys().sort()
@@ -731,7 +823,24 @@ class LayerCollection
         return comparison
       end
     end
+    
+    # Also compare VIAS if needed
+    if @vias.length != other_collection.vias.length
+      return @vias.length <=> other_collection.vias.length
+    end
+    
+    # Compare VIA statements
+    @vias.zip(other_collection.vias).each do |via_a, via_b|
+      comparison = via_a['line'] <=> via_b['line']
+      return comparison if comparison != 0
+    end
+    
     return 0
+  end
+  
+  # Add accessor for vias
+  def vias
+    return @vias
   end
 end
 
@@ -923,6 +1032,7 @@ def main(opts)
   errors[:strange_direction]            = Array.new
   errors[:missing_use]                  = Array.new
   errors[:strange_use]                  = Array.new
+  errors[:via_missing_obs_layer]        = Array.new
 
 
   # if we just have one lef specified by the options, use that
@@ -1414,6 +1524,9 @@ def main(opts)
           error_description += "Error: The following cells had a SIZE property that was inconsistent with the AREA stated in the following Liberty files.\n"
         when :liberty_incorrect_pin_property
           error_description += "Error: The following cells have mismtached values between LIB and LEF.\n" 
+		when :via_missing_obs_layer
+			error_description += "Error: The following VIAS do not have associated OBS layers.\n"
+  		    error_description += "VIAS in OBS sections should have corresponding layer definitions.\n"
         end
         
         error_description += error_header_end
