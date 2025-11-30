@@ -965,10 +965,10 @@ def get_layers_from_tlef(tlef_fn)
 
 end
 
-def main(opts)
-  $log.debug("main")
-  
-################################## WS DIR Parsing (TODO: needs to be method)
+private
+
+# WS DIR Parsing (TODO: needs to be method) (This is completed)
+def parse_ws_dir(opts)
   proj_dir = opts.wsdir
   liberty_dirpath = opts.libdir
   files_to_use_dict = nil
@@ -985,8 +985,11 @@ def main(opts)
   unless opts.tlef.nil?
   	tlef_files = opts.tlef
 	end
+  return proj_dir, liberty_dirpath, liberty_files, lef_files, tlef_files
+end
 
-################################## LEF Parsing (TODO: needs to be method)
+# LEF Parsing (TODO: needs to be method) (This is completed)
+def parse_lef_files(opts, lef_files, tlef_files, errors)
   # Set layer ordering
   layer_order = LayerCollection::layer_order
   LayerCollection::layer_order = layer_order
@@ -1007,33 +1010,6 @@ def main(opts)
     LayerCollection::use_tlef_layers(new_layers)
   end
   puts ""
-
-  # Initialize array for the LEF parsing Errors
-  errors = Hash.new
-  errors[:line_ending_semicolons]       = Array.new 
-  errors[:missing_property_definitions] = Array.new
-  errors[:missing_end_library_token]    = Array.new
-  errors[:mangled_cell_end]             = Array.new
-  errors[:missing_cell_end]             = Array.new
-  errors[:unknown_pin_property]         = Array.new
-  errors[:unknown_cell_property]        = Array.new
-  errors[:unknown_layer]                = Array.new
-  errors[:missing_origin]               = Array.new
-  errors[:strange_origin]               = Array.new
-  errors[:strange_foreign]              = Array.new
-  errors[:missing_class]                = Array.new
-  errors[:strange_class]                = Array.new
-  errors[:missing_symmetry]             = Array.new
-  errors[:strange_symmetry]             = Array.new
-  errors[:missing_size]                 = Array.new
-  errors[:missing_site]                 = Array.new
-  errors[:strange_site]                 = Array.new
-  errors[:missing_direction]            = Array.new
-  errors[:strange_direction]            = Array.new
-  errors[:missing_use]                  = Array.new
-  errors[:strange_use]                  = Array.new
-  errors[:via_missing_obs_layer]        = Array.new
-
 
   # if we just have one lef specified by the options, use that
   if lef_files.nil? || lef_files.empty?
@@ -1117,15 +1093,12 @@ def main(opts)
     parsed_lef_file.sort!()
     parsed_lef_files[lef_file_path] = parsed_lef_file
   }
-  
-################################## Lib Parsing (TODO: needs to be method)
+  return parsed_lef_files, reportDirectoryName
+end
+
+# Lib Parsing (TODO: needs to be method) (This is completed)
+def parse_lib_files(opts, liberty_dirpath, liberty_files, errors)
   unless liberty_dirpath.nil? && liberty_files.nil?
-    errors[:lef_missing_cell] = Array.new
-    errors[:lef_missing_pin] = Array.new
-    errors[:liberty_missing_cell] = Array.new
-    errors[:liberty_incorrect_pin_property] = Array.new
-    errors[:liberty_missing_pin] = Array.new
-    errors[:area_mismatch] = Array.new
 
     # If the path given doesn't have the folder-name-ending /, add one.
     unless liberty_dirpath.nil?
@@ -1203,10 +1176,13 @@ def main(opts)
       lefcount += 1
     end #End .each
     puts ""
+    return liberty_data
+end
+end
 
-   ################################## LEF-LIB Compare (TODO: needs to be method)
-    # Compare data; run checks.
-
+# LEF-LIB Compare (TODO: needs to be method) (This is completed)
+# Compare data; run checks.
+def compare_lef_lib(parsed_lef_files, liberty_data, errors)
     $log.debug("Comparing LEF-LIB...")
 
     missing_cells = Hash.new
@@ -1394,18 +1370,14 @@ def main(opts)
       end
       errors[:lef_missing_pin].push(lef_missing_pins_msg)
     end
-  end
 
- ###TEMP - FOR DEBUGGING###
- #puts "End of comparision, exiting..."
- #exit
- ##########################
+end
 
-
-################################## Print file and errors (TODO: needs to be method)
-  # Print the file
-  # TODO: the errors are currently printed on error-to-error basis, they should be 
-  # collected and printed file-to-file. ie. Lib1.lib had these errors, Lib2.lib had 
+# Print file and errors (TODO: needs to be method) (This is completed)
+# Print the file
+# TODO: the errors are currently printed on error-to-error basis, they should be 
+# collected and printed file-to-file. ie. Lib1.lib had these errors, Lib2.lib had 
+def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
 
   # other errors
   lefcount = 1   
@@ -1414,9 +1386,12 @@ def main(opts)
     print "Printing sorted LEF file [#{lefcount}/#{parsed_lef_files.length}] to '" + lef_filename + "                   \r"
     $stdout.flush
     output_filename = lef_filename + "_sorted"
-    # TODO: use block format for File.open
+
+    # TODO: use block format for File.open (This is now complete)
     begin
-    outFile = File.open(output_filename, "w")
+      File.open(output_filename, "w") do |outFile|
+        parsed_lef_file.print(outFile)
+      end # outFile is automatically closed here
 
     # Rescues if user does not have permissions to place sorted LEF files within DDC.
     rescue Errno::EACCES => e
@@ -1424,141 +1399,235 @@ def main(opts)
       puts "You cannot place sorted_lef files here, placing them in report directory (see home directory)."
 
       # Creating the necessary subdirectories within the report directory, found in user's home.
-      # Warning: The "~" in filepath may not work for every operating system.
       reportDirectoryCommand = "mkdir ~/'#{reportDirectoryName}'" 
       system(reportDirectoryCommand + "/sortedFiles")
         
-
       # Creating sorted_lef filename and path to go in user's report directory.
       output_filename = ENV['HOME'] + "/" + reportDirectoryName + "/sortedFiles/" + File.basename(output_filename)
-      outFile = File.open(output_filename, "w")
-
+      File.open(output_filename, "w") do |outFile|
+        parsed_lef_file.print(outFile)
+      end # outFile is automatically closed here
     end
-      # Must run regardless of permission error (actually creates file).
-      parsed_lef_file.print(outFile)
-      outFile.close()
     
-    
-    # If there are errors, print errors to file
-    error_file_opened = false
-    error_types = errors.keys()
-    error_count = 1 #counter to track tests
-    error_file = nil
-    error_description = nil
-    error_header_end = "--------------------------------------------------------------\n"
-    error_footer =     "--------------------------------------------------------------\n"
-    error_types.each do |error_type|
-      unless errors[error_type].empty?
-        if !error_file_opened then
-          error_filename = lef_filename + "_errors"
-          begin
-          error_file = File.open(error_filename, "w")
-
-          # If user cannot place error file within DDC, send it to report directory within user's home.
-          rescue Errno::EACCES => e
-          # make correct filepath to the report directory within users home.
-          puts "You cannot place error files here, placing them in report directory (see home directory)."
-          
-          # Ensure that errorFile subdirectory exists within report directory.
-          reportDirectoryCommand = "mkdir ~/'#{reportDirectoryName}'"
-          system(reportDirectoryCommand + "/errorFiles")
-            
-
-          # Creating filepath and name for error file to be sent to user's report directory (within home directory).
-          error_filename = ENV['HOME'] + "/" + reportDirectoryName + "/errorFiles/" + File.basename(error_filename)
-          error_file = File.open(error_filename, "w")
-        end
-          
-          error_file_opened = true
-        end
-        error_description = "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed.\n"
-        # TODO: should be case error_type (This is now complete)
-        
-        case error_type
-        when :line_ending_semicolons
-          error_description += "Warning: The following lines have improper lack of space before the ending semicolon.\n"
-          error_description += 
-          "These issues are fixed in " + output_filename + ".\n"
-
-        #These 'strange' errors are intentionally skipped
-        when :strange_origin, :strange_foreign, :strange_class, :strange_site, :strange_symmetry, :strange_direction, :strange_use
-          next
-
-        when :missing_property_definitions
-          error_description += "Warning: The LEF file does not have any PROPERTYDEFINITIONS listed at the start of the file.\n"
-        when :missing_end_library_token
-          error_description += "Error: The LEF file does not contain an 'END LIBRARY' delimiter.\n"
-        when :mangled_cell_end
-          error_description += "Error: The following cells have non-matching end delimiters.\n"
-        when :missing_cell_end
-          error_description += "Error: The following cells are missing end delimiters.\n"
-        when :unknown_pin_property
-          error_description += "Warning: The following lines specify an unrecognized pin property.\n"
-        when :unknown_cell_property
-          error_description += "Warning: The following lines specify an unrecognized cell property.\n"
-        when :unknown_layer
-          error_description += "Warning: The following lines defined unrecognized layers.\n"
-        when :missing_origin
-          error_description += "Error: The following cells do not have an ORIGIN defined.\n"
-        when :missing_class
-          error_description += "Error: The following cells do not have a CLASS defined.\n"
-        when :missing_site
-          error_description += "Error: The following cells do not have a SITE defined.\n"
-        when :missing_size
-          error_description += "Error: The following cells do not have a SIZE defined.\n"
-        when :missing_symmetry
-          error_description += "Error: The following cells do not have a SYMMETRY defined.\n"
-        when :missing_direction
-          error_description += "Error: The following pins do not have a DIRECTION defined.\n"
-        when :missing_use
-          error_description += "Error: The following pins do not have a USE defined.\n"
-        when :lef_missing_cell
-          error_description += "Error: The following cells were found in Liberty files, but not in the LEF file.\n"
-        when :lef_missing_pin
-          error_description += "Error: The following cells had the following pins defined in Liberty files, but not in the LEF file.\n"
-        when :liberty_missing_cell
-          error_description += "Error: The following cells were found in the LEF file, but not in the following Liberty files.\n"
-        when :liberty_missing_pin
-          error_description += "Error: The following cells had the following pins defined in the LEF file, but not in the following Liberty files.\n"
-        when :area_mismatch
-          error_description += "Error: The following cells had a SIZE property that was inconsistent with the AREA stated in the following Liberty files.\n"
-        when :liberty_incorrect_pin_property
-          error_description += "Error: The following cells have mismtached values between LIB and LEF.\n" 
-		when :via_missing_obs_layer
-			error_description += "Error: The following VIAS do not have associated OBS layers.\n"
-  		    error_description += "VIAS in OBS sections should have corresponding layer definitions.\n"
-        end
-        
-        error_description += error_header_end
-        puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed."
-        ecount = 0
-        if errors[error_type].length < 1000
-          errors[error_type].each do |line|
-            ecount += 1
-            print "Adding [#{ecount}/#{errors[error_type].length}] lines to error description...          \r"
-            $stdout.flush
-            error_description += line
-          end
-          print "\n"
-        elsif opts.ignore
-          emsg = "Too many errors to print every line [#{errors[error_type].length} total error lines]"
-          puts emsg
-          error_description += emsg
-        end
-        
-        error_description += error_footer
-        $log.debug(error_description) 
-        error_file.print error_description
-      else
-        puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' passed."
+    # First, check if there are ANY errors at all
+    has_errors = false
+    errors.keys().each do |error_type|
+      if !errors[error_type].empty?
+        has_errors = true
+        break
       end
-      error_count += 1
     end
+
+    # If there were errors, open the error file ONCE and write all errors to it
+    if has_errors
+      error_filename = lef_filename + "_errors"
+      
+      begin
+        # TODO: use block format for File.open (This is now complete)
+        File.open(error_filename, "w") do |error_file|
+        
+          error_types = errors.keys()
+          error_count = 1 #counter to track tests
+          error_header_end = "--------------------------------------------------------------\n"
+          error_footer =     "--------------------------------------------------------------\n"
+          
+          error_types.each do |error_type|
+            if !errors[error_type].empty?
+              error_description = "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed.\n"
+              
+              case error_type
+              when :line_ending_semicolons
+                error_description += "Warning: The following lines have improper lack of space before the ending semicolon.\n"
+                error_description += "These issues are fixed in " + output_filename + ".\n"
+              
+              # These 'strange' errors are intentionally skipped
+              when :strange_origin, :strange_foreign, :strange_class, :strange_site, :strange_symmetry, :strange_direction, :strange_use
+                puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' passed."
+                error_count += 1
+                next
+                
+              when :missing_property_definitions
+                error_description += "Warning: The LEF file does not have any PROPERTYDEFINITIONS listed at the start of the file.\n"
+              when :missing_end_library_token
+                error_description += "Error: The LEF file does not contain an 'END LIBRARY' delimiter.\n"
+              when :mangled_cell_end
+                error_description += "Error: The following cells have non-matching end delimiters.\n"
+              when :missing_cell_end
+                error_description += "Error: The following cells are missing end delimiters.\n"
+              when :unknown_pin_property
+                error_description += "Warning: The following lines specify an unrecognized pin property.\n"
+              when :unknown_cell_property
+                error_description += "Warning: The following lines specify an unrecognized cell property.\n"
+              when :unknown_layer
+                error_description += "Warning: The following lines defined unrecognized layers.\n"
+              when :missing_origin
+                error_description += "Error: The following cells do not have an ORIGIN defined.\n"
+              when :missing_class
+                error_description += "Error: The following cells do not have a CLASS defined.\n"
+              when :missing_site
+                error_description += "Error: The following cells do not have a SITE defined.\n"
+              when :missing_size
+                error_description += "Error: The following cells do not have a SIZE defined.\n"
+              when :missing_symmetry
+                error_description += "Error: The following cells do not have a SYMMETRY defined.\n"
+              when :missing_direction
+                error_description += "Error: The following pins do not have a DIRECTION defined.\n"
+              when :missing_use
+                error_description += "Error: The following pins do not have a USE defined.\n"
+              when :via_missing_obs_layer
+                error_description += "Error: The following VIAS do not have associated OBS layers.\n"
+                error_description += "VIAS in OBS sections should have corresponding layer definitions.\n"
+              when :lef_missing_cell
+                error_description += "Error: The following cells were found in Liberty files, but not in the LEF file.\n"
+              when :lef_missing_pin
+                error_description += "Error: The following cells had the following pins defined in Liberty files, but not in the LEF file.\n"
+              when :liberty_missing_cell
+                error_description += "Error: The following cells were found in the LEF file, but not in the following Liberty files.\n"
+              when :liberty_missing_pin
+                error_description += "Error: The following cells had the following pins defined in the LEF file, but not in the following Liberty files.\n"
+              when :area_mismatch
+                error_description += "Error: The following cells had a SIZE property that was inconsistent with the AREA stated in the following Liberty files.\n"
+              when :liberty_incorrect_pin_property
+                error_description += "Error: The following cells have mismtached values between LIB and LEF.\n" 
+              end # end case
+              
+              error_description += error_header_end
+              puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed."
+              ecount = 0
+              if errors[error_type].length < 1000
+                errors[error_type].each do |line|
+                  ecount += 1
+                  print "Adding [#{ecount}/#{errors[error_type].length}] lines to error description...          \r"
+                  $stdout.flush
+                  error_description += line
+                end
+                print "\n"
+              elsif opts.ignore
+                emsg = "Too many errors to print every line [#{errors[error_type].length} total error lines]"
+                puts emsg
+                error_description += emsg
+              end
+              
+              error_description += error_footer
+              $log.debug(error_description) 
+              error_file.print error_description
+              
+            else
+              puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' passed."
+            end # end if !errors.empty?
+            error_count += 1
+          end # end error_types.each
+          
+        end # error_file is automatically closed here
+      
+      # If user cannot place error file within DDC, send it to report directory within user's home.
+      rescue Errno::EACCES => e
+        # make correct filepath to the report directory within users home.
+        puts "You cannot place error files here, placing them in report directory (see home directory)."
+        
+        # Ensure that errorFile subdirectory exists within report directory.
+        reportDirectoryCommand = "mkdir ~/'#{reportDirectoryName}'"
+        system(reportDirectoryCommand + "/errorFiles")
+          
+        # Creating filepath and name for error file to be sent to user's report directory (within home directory).
+        error_filename = ENV['HOME'] + "/" + reportDirectoryName + "/errorFiles/" + File.basename(error_filename)
+        
+        # Re-run the entire write logic, but with the new filename
+        File.open(error_filename, "w") do |error_file|
+          # (The entire error-writing loop is duplicated here)
+          error_types = errors.keys()
+          error_count = 1 #counter to track tests
+          error_header_end = "--------------------------------------------------------------\n"
+          error_footer =     "--------------------------------------------------------------\n"
+          
+          error_types.each do |error_type|
+            if !errors[error_type].empty?
+              error_description = "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed.\n"
+              
+              case error_type
+              when :line_ending_semicolons
+                error_description += "Warning: The following lines have improper lack of space before the ending semicolon.\n"
+                error_description += "These issues are fixed in " + output_filename + ".\n"
+              when :strange_origin, :strange_foreign, :strange_class, :strange_site, :strange_symmetry, :strange_direction, :strange_use
+                puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' passed."
+                error_count += 1
+                next
+              when :missing_property_definitions
+                error_description += "Warning: The LEF file does not have any PROPERTYDEFINITIONS listed at the start of the file.\n"
+              when :missing_end_library_token
+                error_description += "Error: The LEF file does not contain an 'END LIBRARY' delimiter.\n"
+              when :mangled_cell_end
+                error_description += "Error: The following cells have non-matching end delimiters.\n"
+              when :missing_cell_end
+                error_description += "Error: The following cells are missing end delimiters.\n"
+              when :unknown_pin_property
+                error_description += "Warning: The following lines specify an unrecognized pin property.\n"
+              when :unknown_cell_property
+                error_description += "Warning: The following lines specify an unrecognized cell property.\n"
+              when :unknown_layer
+                error_description += "Warning: The following lines defined unrecognized layers.\n"
+              when :missing_origin
+                error_description += "Error: The following cells do not have an ORIGIN defined.\n"
+              when :missing_class
+                error_description += "Error: The following cells do not have a CLASS defined.\n"
+              when :missing_site
+                error_description += "Error: The following cells do not have a SITE defined.\n"
+              when :missing_size
+                error_description += "Error: The following cells do not have a SIZE defined.\n"
+              when :missing_symmetry
+                error_description += "Error: The following cells do not have a SYMMETRY defined.\n"
+              when :missing_direction
+                error_description += "Error: The following pins do not have a DIRECTION defined.\n"
+              when :missing_use
+                error_description += "Error: The following pins do not have a USE defined.\n"
+              when :via_missing_obs_layer
+                error_description += "Error: The following VIAS do not have associated OBS layers.\n"
+                error_description += "VIAS in OBS sections should have corresponding layer definitions.\n"
+              when :lef_missing_cell
+                error_description += "Error: The following cells were found in Liberty files, but not in the LEF file.\n"
+              when :lef_missing_pin
+                error_description += "Error: The following cells had the following pins defined in Liberty files, but not in the LEF file.\n"
+              when :liberty_missing_cell
+                error_description += "Error: The following cells were found in the LEF file, but not in the following Liberty files.\n"
+              when :liberty_missing_pin
+                error_description += "Error: The following cells had the following pins defined in the LEF file, but not in the following Liberty files.\n"
+              when :area_mismatch
+                error_description += "Error: The following cells had a SIZE property that was inconsistent with the AREA stated in the following Liberty files.\n"
+              when :liberty_incorrect_pin_property
+                error_description += "Error: The following cells have mismtached values between LIB and LEF.\n" 
+              end # end case
+              
+              error_description += error_header_end
+              puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed."
+              ecount = 0
+              if errors[error_type].length < 1000
+                errors[error_type].each do |line|
+                  ecount += 1
+                  print "Adding [#{ecount}/#{errors[error_type].length}] lines to error description...          \r"
+                  $stdout.flush
+                  error_description += line
+                end
+                print "\n"
+              elsif opts.ignore
+                emsg = "Too many errors to print every line [#{errors[error_type].length} total error lines]"
+                puts emsg
+                error_description += emsg
+              end
+              
+              error_description += error_footer
+              $log.debug(error_description) 
+              error_file.print error_description
+              
+            else
+              puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' passed."
+            end # end if !errors.empty?
+            error_count += 1
+          end # end error_types.each
+        end # error_file is automatically closed here (rescue)
+      end # end begin/rescue
+      
+    end # end if has_errors
   
-    if error_file_opened then
-      error_file.close()
-    
-  end
     lefcount += 1
   puts "\nFiles created are placed here: "
 	puts reportDirectoryName
@@ -1566,6 +1635,67 @@ def main(opts)
 }
 end
 
+def main(opts)
+  $log.debug("main")
+  
+  # --- 1. WS DIR Parsing ---
+  proj_dir, liberty_dirpath, liberty_files, lef_files, tlef_files = parse_ws_dir(opts)
+
+  # --- 2. Initialize Errors Hash ---
+  # This now lives in 'main' so it can be passed to all helper methods
+  errors = Hash.new
+  errors[:line_ending_semicolons]       = Array.new 
+  errors[:missing_property_definitions] = Array.new
+  errors[:missing_end_library_token]    = Array.new
+  errors[:mangled_cell_end]             = Array.new
+  errors[:missing_cell_end]             = Array.new
+  errors[:unknown_pin_property]         = Array.new
+  errors[:unknown_cell_property]        = Array.new
+  errors[:unknown_layer]                = Array.new
+  errors[:missing_origin]               = Array.new
+  errors[:strange_origin]               = Array.new
+  errors[:strange_foreign]              = Array.new
+  errors[:missing_class]                = Array.new
+  errors[:strange_class]                = Array.new
+  errors[:missing_symmetry]             = Array.new
+  errors[:strange_symmetry]             = Array.new
+  errors[:missing_size]                 = Array.new
+  errors[:missing_site]                 = Array.new
+  errors[:strange_site]                 = Array.new
+  errors[:missing_direction]            = Array.new
+  errors[:strange_direction]            = Array.new
+  errors[:missing_use]                  = Array.new
+  errors[:strange_use]                  = Array.new
+  errors[:via_missing_obs_layer]        = Array.new
+  
+  # These are added for the lib compare methods
+  errors[:lef_missing_cell]             = Array.new
+  errors[:lef_missing_pin]              = Array.new
+  errors[:liberty_missing_cell]         = Array.new
+  errors[:liberty_incorrect_pin_property] = Array.new
+  errors[:liberty_missing_pin]          = Array.new
+  errors[:area_mismatch]                = Array.new
+  
+  # --- 3. LEF Parsing ---
+  parsed_lef_files, reportDirectoryName = parse_lef_files(opts, lef_files, tlef_files, errors)
+  
+  # --- 4. Lib Parsing ---
+  liberty_data = parse_lib_files(opts, liberty_dirpath, liberty_files, errors)
+
+  # --- 5. LEF-LIB Compare ---
+  unless liberty_data.nil?
+    compare_lef_lib(parsed_lef_files, liberty_data, errors)
+  end
+
+  ###TEMP - FOR DEBUGGING###
+  #puts "End of comparision, exiting..."
+  #exit
+  ##########################
+
+  # --- 6. Print file and errors ---
+  print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
+
+end
 
 class Liberty_Cell
   attr_reader :name, :pins
