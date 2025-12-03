@@ -525,64 +525,89 @@ class Pin
 end
 
 class Layer
-  attr_reader :name, :coordinates
+  attr_reader :name, :coordinates, :vias_in_layer
   @@coordinate_pad_precision = 3
   def self.start_line?(line)
     return line.match(/^\s*LAYER/)
   end
+
   def initialize(file, index, errors)
-    line = get_current_line(file, index)
-    if !Layer::start_line?(line)
-      raise "Error: Attempted to initialize Layer, but file location provided did not start at a Layer."
-    end
-    @errors = errors
-    @start_line = line
-    @name = line.split(/LAYER /)[1]
-    if !LayerCollection::recognized_layer?(@name)
-      @errors[:unknown_layer].push("Line " + (index.value + 1).to_s() + ": " + line)
+  line = get_current_line(file, index)
+  if !Layer::start_line?(line)
+    raise "Error: Attempted to initialize Layer, but file location provided did not start at a Layer."
+  end
+  @errors = errors
+  @start_line = line
+  @name = line.split(/LAYER /)[1]
+  
+  # Get the indentation level of the LAYER line
+  layer_indent = line[/^\s*/].length
+  
+  if !LayerCollection::recognized_layer?(@name)
+    @errors[:unknown_layer].push("Line " + (index.value + 1).to_s() + ": " + line)
+  end
+  
+  $log.debug((index.value + 1).to_s + ": found layer " + line)
+  
+  if line.match(/\S;\s*$/)
+    error_msg = (index.value + 1).to_s + "\n"
+    @errors[:line_ending_semicolons].push(error_msg)
+    line = line.gsub(/;\s*$/, " ;\n")
+  end
+
+  @coordinates = Array.new
+  @vias_in_layer = Array.new
+  line = get_next_line(file, index)
+  
+  $log.debug((index.value + 1).to_s + ":" + line)
+  
+  # Read until we hit another LAYER, END, or a line with same/less indentation
+  until line.match(/(^\s*LAYER)|(^\s*END)/)
+    current_indent = line[/^\s*/].length
+    
+    # Stop if we encounter a line with same or less indentation than LAYER
+    # (unless it's a VIA that's properly indented under this layer)
+    if current_indent <= layer_indent && !line.match(/^\s*$/)
+      break
     end
     
-    $log.debug((index.value + 1).to_s + ": found layer " + line)
+    # Check if this is a VIA line
+    if line.match(/^\s*VIA/)
+      # Store VIA info but don't process as coordinate
+      @vias_in_layer.push({
+        'line' => line,
+        'line_num' => index.value + 1
+      })
+      line = get_next_line(file, index)
+      next
+    end
     
     if line.match(/\S;\s*$/)
       error_msg = (index.value + 1).to_s + "\n"
       @errors[:line_ending_semicolons].push(error_msg)
       line = line.gsub(/;\s*$/, " ;\n")
     end
-
-    @coordinates = Array.new
+    # Force coordinate numbers to be written with three decimal places of precision.
+    coordinate_pieces = line.split()
+    line  = line.split(/\w/)[0]
+    line += coordinate_pieces[0]
+    for i in 1..4
+      if !coordinate_pieces[i].match(/\.\d{#{@@coordinate_pad_precision + 1}}/)
+        current_num = coordinate_pieces[i].to_f()
+        line += " " + "%.#{@@coordinate_pad_precision}f" % current_num
+      else
+        line += " " + coordinate_pieces[i]
+      end
+    end
+    line += " ;\n"
+    # Add coordinate to list.
+    @coordinates.push(line)
     line = get_next_line(file, index)
     
     $log.debug((index.value + 1).to_s + ":" + line)
     
-    until line.match(/(LAYER)|(END)/)
-      if line.match(/\S;\s*$/)
-        error_msg = (index.value + 1).to_s + "\n"
-        @errors[:line_ending_semicolons].push(error_msg)
-        line = line.gsub(/;\s*$/, " ;\n")
-      end
-      # Force coordinate numbers to be written with three decimal places of precision.
-      coordinate_pieces = line.split()
-			line  = line.split(/\w/)[0]
-      # line.match(/^(\s*)/){ |m| line = 1 }
-      line += coordinate_pieces[0]
-      for i in 1..4
-        if !coordinate_pieces[i].match(/\.\d{#{@@coordinate_pad_precision + 1}}/)
-          current_num = coordinate_pieces[i].to_f()
-          line += " " + "%.#{@@coordinate_pad_precision}f" % current_num
-        else
-          line += " " + coordinate_pieces[i]
-        end
-      end
-      line += " ;\n"
-      # Add coordinate to list.
-      @coordinates.push(line)
-      line = get_next_line(file, index)
-      
-      $log.debug((index.value + 1).to_s + ":" + line)
-      
-    end
   end
+end
   def sort!()
     @coordinates = @coordinates.sort {
       |a, b|
@@ -615,6 +640,11 @@ class Layer
     @coordinates.each do |line|
       outFile.print line
     end
+    
+    # Print VIAs that were inside this layer
+    @vias_in_layer.each do |via|
+      outFile.print via['line']
+    end
   end
   def compare_to(other_layer)
     if @coordinates.length() != other_layer.coordinates().length()
@@ -636,13 +666,11 @@ end
 class LayerCollection
   @@layer_order_selected = "s40"
   @@layer_orders = Hash.new
-  # TODO: make techfile or TLEF required for Layer checks, these lists
   @@layer_orders["s40"] = Array["LP_HVTP","LP_HVTN","CONT", "ME1", "VI1", "ME2","VI2","ME3"]
   @@layer_orders["abc"] = Array["met2", "via", "met1", "mcon", "li1", "nwell", "pwell"]
 
-  attr_reader :layers, :vias  # ADD ':vias' here
+  attr_reader :layers, :vias
   
-  # Either an Obstruction or a Port.
   def self.start_line?(line)
     return line.match(/^\s*(OBS)|(PORT)/)
   end
@@ -660,10 +688,6 @@ class LayerCollection
     return @@layer_order_selected
   end
 
-  #
-  # changes layer orders in the event that a tlef/tf file is found, otherwise
-  # uses the default.
-  #
   def self.use_tlef_layers(new_layers)
     new_layer_order = "from_tlef"
     @@layer_orders[new_layer_order] = new_layers
@@ -680,8 +704,9 @@ class LayerCollection
       raise "Error: Attempted to initialize Obstruction or Port, but file location provided did not start at an Obstruction or Port."
     end
     @start_line = line
+    @start_line_num = index.value + 1
     @layers = Hash.new
-    @vias = Array.new  # Store VIA statements
+    @vias = Array.new
     @errors = errors
     line = get_next_line(file, index)
     
@@ -689,10 +714,29 @@ class LayerCollection
       if Layer::start_line?(line)
         new_layer = Layer.new(file, index, errors)
         @layers[new_layer.name] = new_layer
+        
+        # Collect VIAs that were inside this layer (they have a layer association)
+        new_layer.vias_in_layer.each do |via_info|
+          via_name = extract_via_name(via_info['line'])
+          @vias.push({
+            'line' => via_info['line'],
+            'name' => via_name,
+            'line_num' => via_info['line_num'],
+            'section_start' => @start_line_num,
+            'associated_layer' => new_layer.name
+          })
+        end
+        
       elsif via_start_line?(line)
-        # Parse VIA statement
-        new_via = parse_via(line, file, index, errors)
-        @vias.push(new_via)
+        # This VIA is outside any LAYER block (no association)
+        via_name = extract_via_name(line)
+        @vias.push({
+          'line' => line.dup,
+          'name' => via_name,
+          'line_num' => index.value + 1,
+          'section_start' => @start_line_num,
+          'associated_layer' => nil
+        })
         line = get_next_line(file, index)
       end
       line = get_current_line(file, index)
@@ -700,7 +744,7 @@ class LayerCollection
     @end_line = line
     get_next_line(file, index)
     
-    # Check that all VIAS have associated OBS layers
+    # Check VIA-OBS associations and generate warnings
     check_via_obs_associations()
   end
   
@@ -708,24 +752,21 @@ class LayerCollection
     return line.match(/^\s*VIA/)
   end
   
-  def parse_via(line, file, index, errors)
-    # Store the raw VIA line for now
-    # Format: VIA [MASK maskNum] pt viaName ;
+  def parse_via(line, file, index, errors, associated_layer)
     via_line = line.dup
-    
-    # Extract via name for checking associations
     via_name = extract_via_name(line)
     
     return {
       'line' => via_line,
       'name' => via_name,
-      'line_num' => index.value + 1
+      'line_num' => index.value + 1,
+      'section_start' => @start_line_num,
+      'associated_layer' => associated_layer
     }
   end
   
   def extract_via_name(line)
     # VIA statement format: VIA [MASK maskNum] pt viaName ;
-    # Extract the via name which should be the last word before semicolon
     parts = line.split
     via_name = nil
     
@@ -743,34 +784,19 @@ class LayerCollection
     return via_name
   end
   
-  def check_via_obs_associations
-    # Check if there are VIAS but no LAYERS in this OBS section
-    if !@vias.empty? && @layers.empty?
-      @vias.each do |via|
-        error_msg = "Line #{via['line_num']}: VIA '#{via['name']}' has no associated OBS layers\n"
-        @errors[:via_missing_obs_layer].push(error_msg)
-      end
-    end
-    
-    # Additional check: if there are layers, verify they are appropriate for the VIAS
-    # This could be expanded based on specific design rules
-    if !@vias.empty? && !@layers.empty?
-      # Check if layers are valid for VIAS (you might want to add specific rules here)
-      valid_via_layers = ['metal1', 'metal2', 'metal3', 'via1', 'via2'] # Example valid layers
-      @layers.each_key do |layer_name|
-        if !valid_via_layers.include?(layer_name.downcase)
-          @vias.each do |via|
-            warning_msg = "Line #{via['line_num']}: VIA '#{via['name']}' may have inappropriate layer '#{layer_name}'\n"
-            # You might want to add this to a different warning category
-          end
-        end
+  def check_via_obs_associations()
+    # Check each VIA individually and generate warnings for those without layers
+    @vias.each do |via|
+      if via['associated_layer'].nil?
+        # This VIA has no associated layer - generate WARNING
+        warning_msg = "Line #{via['line_num']}: '#{via['name']}' in OBS/PORT section has no associated OBS layer\n"
+        @errors[:via_missing_obs_layer].push(warning_msg)
       end
     end
   end
   
   def sort!()
     @layers.each_value{|layer| layer.sort!()}
-    # VIAS don't typically need sorting as they're single statements
   end
   
   def print(outFile)
@@ -815,8 +841,7 @@ class LayerCollection
     if !those_keys[index].nil?
       return 1
     end
-    # Ports contain identical lists of keys.
-    # Sort by comparing the layers they contain.
+    
     these_keys.each do |key|
       comparison = @layers[key].compare_to(other_collection.layers()[key])
       if comparison != 0
@@ -824,12 +849,10 @@ class LayerCollection
       end
     end
     
-    # Also compare VIAS if needed
     if @vias.length != other_collection.vias.length
       return @vias.length <=> other_collection.vias.length
     end
     
-    # Compare VIA statements
     @vias.zip(other_collection.vias).each do |via_a, via_b|
       comparison = via_a['line'] <=> via_b['line']
       return comparison if comparison != 0
@@ -838,7 +861,6 @@ class LayerCollection
     return 0
   end
   
-  # Add accessor for vias
   def vias
     return @vias
   end
