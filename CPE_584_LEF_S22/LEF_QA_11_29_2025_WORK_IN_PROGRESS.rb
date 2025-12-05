@@ -171,6 +171,12 @@ class LEF_File
         errors[:missing_end_library_token].push("")
       end
     end
+    
+    # CHECK VIA OBS AFTER PARSING ALL CELLS
+    @cells.each_value do |cell|
+      cell.check_via_obs_association(errors)
+    end
+    
     @end_line = line
     check_for_uncommon_properties(@errors[:strange_class], Cell::classes_found)
     check_for_uncommon_properties(@errors[:strange_symmetry], Cell::symmetries_found)
@@ -270,42 +276,43 @@ class Cell
         end
 				split_line = line.split()
 				split_line[0] = split_line[0].upcase()
-
         if split_line[0] == "PROPERTY"
           @keywordProperties.push(line)
         else
-          @properties.push(line)
-          
-          # TODO: should be case split_line[0] (This is now complete)
-          case split_line[0]
-          when "ORIGIN"
+          # TODO: should be case split_line[0]
+          if split_line[0] == "ORIGIN"
             origin_found = true
             if split_line[1] != "0" || split_line[2] != "0" then
               @errors[:strange_origin].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
             end
-          when "FOREIGN"
+          end
+          if split_line[0] == "FOREIGN"
             if split_line[2] != "0" || split_line[3] != "0" then
               @errors[:strange_foreign].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
             end
-          when "CLASS"
+          end
+          if split_line[0] == "CLASS"
             class_found = true
             Cell::register_property(@@classes_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          when "SIZE"
+          end
+          if split_line[0] == "SIZE"
             size_found = true
-          when "SYMMETRY"
+          end
+          if split_line[0] == "SYMMETRY"
             symmetry_found = true
             Cell::register_property(@@symmetries_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          when "SITE"
+          end
+          if split_line[0] == "SITE"
             site_found = true
             Cell::register_property(@@sites_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          when "SOURCE"
+          end
+          if split_line[0] == "SOURCE"
             source_found = true
-          else
-            # Handle unknown properties
-            if !(@@PropertyOrder.include? line.split[0].upcase)
-              error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
-              @errors[:unknown_cell_property].push error_msg
-            end
+          end
+          @properties.push(line)
+          if !(@@PropertyOrder.include? line.split[0].upcase)
+            error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
+            @errors[:unknown_cell_property].push error_msg
           end
         end
         get_next_line(file, index)
@@ -347,6 +354,100 @@ class Cell
       @errors[:missing_cell_end].push("Line " + (index.value + 1).to_s() + ": " + @name + "\n")
     end
   end
+  
+  # New method to check if vias have associated OBS layers
+  def check_via_obs_association(errors)
+    # Find all vias in this cell
+    all_vias = find_all_vias_in_cell()
+  
+    # If no vias found, nothing to check
+    return if all_vias.empty?
+  
+  # Check if cell has OBS section
+    if @obstructions.nil?
+      # Use the first via's line number if available
+      if !all_vias.empty? && all_vias[0]['via'] && all_vias[0]['via']['line_num']
+        via_line = all_vias[0]['via']['line_num']
+        errors[:missing_via_obs] << "Line #{via_line}: Cell #{@name} has vias but no OBS section\n"
+      else
+        errors[:missing_via_obs] << "Line #{@start_line_num}: Cell #{@name} has vias but no OBS section\n"
+      end
+      return
+  end
+  
+    # For each via, check OBS coverage on adjacent layers
+    all_vias.each do |via_data|
+      via = via_data['via']
+      via_rect = via['rect']
+      via_center = via['center']
+      via_line_num = via['line_num']
+    
+      # Check OBS on each adjacent metal layer
+      via_data['adjacent_metal_layers'].each do |metal_layer|
+        clean_metal_layer = metal_layer.strip
+        obs_layer = @obstructions.layers[clean_metal_layer]
+      
+        if obs_layer.nil?
+          errors[:missing_via_obs] << "Line #{via_line_num}: Via in pin #{via['pin_name']} missing OBS on #{clean_metal_layer}\n"
+          next
+        end
+      
+        # Check if any OBS rectangle covers this via
+        via_covered = false
+        obs_layer.coordinates.each do |obs_coord|
+          # FIX: Use scan to extract only numbers for OBS coordinates too
+          obs_numbers = obs_coord.scan(/[+-]?\d*\.?\d+/).map(&:to_f)[0..3]
+        
+          if obs_numbers.length >= 4
+            ox1, oy1, ox2, oy2 = obs_numbers
+           
+            # Check if via is within OBS rectangle (with small margin)
+            margin = 0.01
+            x1, y1, x2, y2 = via_rect
+           
+            if x1 >= (ox1 - margin) &&
+               y1 >= (oy1 - margin) &&
+               x2 <= (ox2 + margin) &&
+               y2 <= (oy2 + margin)
+              via_covered = true
+              break
+            end
+          end
+        end
+      
+        unless via_covered
+          errors[:missing_via_obs] << "Line #{via_line_num}: Via in pin #{via['pin_name']} missing OBS on #{clean_metal_layer}\n"
+        end
+      end
+    end
+  end
+  
+  # Helper method to find all vias in the cell
+  def find_all_vias_in_cell()
+    vias_with_adjacent = []
+    
+    @pins.each_value do |pin|
+      # Extract vias from this pin
+      pin_vias = pin.extract_vias()
+      
+      next if pin_vias.empty?
+      
+      # Find all metal layers in this pin
+      metal_layers_in_pin = pin.find_metal_layers_in_pin()
+      
+      # For each via, record it with adjacent metal layers
+      pin_vias.each do |via|
+        vias_with_adjacent << {
+          'via' => via,
+          'adjacent_metal_layers' => metal_layers_in_pin,
+          'pin_name' => via['pin_name']
+        }
+      end
+    end
+    
+    vias_with_adjacent
+  end
+  
   def sort!()
     # sort all of your cell attributes once they are loaded.
     @pins.each_value{|pin| pin.sort!()}
@@ -392,7 +493,7 @@ class Cell
 end
 
 class Pin
-  attr_reader :properties, :keywordProperties, :name
+  attr_reader :properties, :keywordProperties, :name, :ports
   @@PropertyOrder = [
     "TAPERRULE", "DIRECTION", "USE", "NETEXPR", "SUPPLYSENSITIVITY", 
     "GROUNDSENSITIVITY", "SHAPE", "MUSTJOIN", "PROPERTY", 
@@ -429,7 +530,10 @@ class Pin
     @errors = errors
     @start_line = line
     @start_line_num = index.value + 1
-    @name = line.split(/PIN /)[1].chomp()
+    
+    # FIX: Clean the pin name
+    raw_name = line.split(/PIN /)[1]
+    @name = raw_name.chomp().strip.gsub(/;.*$/, '').strip  # Remove semicolon and whitespace
     
     $log.debug("Pin: " + @name)
       
@@ -486,6 +590,59 @@ class Pin
     @end_line = line
     get_next_line(file, index)
   end
+  
+  # New method to extract vias from this pin's ports
+  def extract_vias()
+    via_info = []
+    
+    @ports.each do |port|
+      port.layers.each do |layer_name, layer|
+        # Clean layer name before checking
+        clean_layer_name = layer_name.strip
+        
+        # Check if this is a CUT layer (via)
+        if LayerCollection.cut_layer?(clean_layer_name)
+          # Get all rectangles in this via layer with their line numbers
+          layer.coordinates.each_with_index do |coord_line, index|
+            # Parse the rectangle coordinates - FIXED
+            numbers = coord_line.scan(/[+-]?\d*\.?\d+/).map(&:to_f)
+            
+            if numbers.length >= 4  # Should be [x1, y1, x2, y2]
+              x1, y1, x2, y2 = numbers[0..3]
+              line_num = layer.line_number_for_coordinate(index)
+              
+              via_info << {
+                'cut_layer' => clean_layer_name,
+                'rect' => [x1, y1, x2, y2],
+                'pin_name' => @name,
+                'center' => [(x1 + x2) / 2.0, (y1 + y2) / 2.0],
+                'line_num' => line_num  # NEW: Store line number
+              }
+            end
+          end
+        end
+      end
+    end
+    
+    via_info
+  end
+  
+  # New method to find all metal layers in this pin
+  def find_metal_layers_in_pin()
+    metal_layers = []
+    
+    @ports.each do |port|
+      port.layers.each_key do |layer_name|
+        clean_layer_name = layer_name.strip
+        if LayerCollection.routing_layer?(clean_layer_name)
+          metal_layers << clean_layer_name
+        end
+      end
+    end
+    
+    metal_layers.uniq
+  end
+  
   def sort!()
     @ports = @ports.sort{
       |a, b|
@@ -525,89 +682,84 @@ class Pin
 end
 
 class Layer
-  attr_reader :name, :coordinates, :vias_in_layer
+  attr_reader :name, :coordinates, :coordinate_lines
   @@coordinate_pad_precision = 3
+  
   def self.start_line?(line)
     return line.match(/^\s*LAYER/)
   end
-
+  
   def initialize(file, index, errors)
-  line = get_current_line(file, index)
-  if !Layer::start_line?(line)
-    raise "Error: Attempted to initialize Layer, but file location provided did not start at a Layer."
-  end
-  @errors = errors
-  @start_line = line
-  @name = line.split(/LAYER /)[1]
-  
-  # Get the indentation level of the LAYER line
-  layer_indent = line[/^\s*/].length
-  
-  if !LayerCollection::recognized_layer?(@name)
-    @errors[:unknown_layer].push("Line " + (index.value + 1).to_s() + ": " + line)
-  end
-  
-  $log.debug((index.value + 1).to_s + ": found layer " + line)
-  
-  if line.match(/\S;\s*$/)
-    error_msg = (index.value + 1).to_s + "\n"
-    @errors[:line_ending_semicolons].push(error_msg)
-    line = line.gsub(/;\s*$/, " ;\n")
-  end
-
-  @coordinates = Array.new
-  @vias_in_layer = Array.new
-  line = get_next_line(file, index)
-  
-  $log.debug((index.value + 1).to_s + ":" + line)
-  
-  # Read until we hit another LAYER, END, or a line with same/less indentation
-  until line.match(/(^\s*LAYER)|(^\s*END)/)
-    current_indent = line[/^\s*/].length
+    line = get_current_line(file, index)
+    if !Layer::start_line?(line)
+      raise "Error: Attempted to initialize Layer, but file location provided did not start at a Layer."
+    end
+    @errors = errors
+    @start_line = line
+    @start_line_num = index.value + 1  # Store starting line number
     
-    # Stop if we encounter a line with same or less indentation than LAYER
-    # (unless it's a VIA that's properly indented under this layer)
-    if current_indent <= layer_indent && !line.match(/^\s*$/)
-      break
+    # FIX: Clean the layer name - remove semicolon and whitespace
+    raw_name = line.split(/LAYER /)[1]
+    @name = raw_name.strip.gsub(/;.*$/, '').strip  # Remove semicolon and everything after
+    
+    if !LayerCollection::recognized_layer?(@name)
+      @errors[:unknown_layer].push("Line " + (index.value + 1).to_s() + ": " + line)
     end
     
-    # Check if this is a VIA line
-    if line.match(/^\s*VIA/)
-      # Store VIA info but don't process as coordinate
-      @vias_in_layer.push({
-        'line' => line,
-        'line_num' => index.value + 1
-      })
-      line = get_next_line(file, index)
-      next
-    end
+    $log.debug((index.value + 1).to_s + ": found layer " + line)
     
     if line.match(/\S;\s*$/)
       error_msg = (index.value + 1).to_s + "\n"
       @errors[:line_ending_semicolons].push(error_msg)
       line = line.gsub(/;\s*$/, " ;\n")
     end
-    # Force coordinate numbers to be written with three decimal places of precision.
-    coordinate_pieces = line.split()
-    line  = line.split(/\w/)[0]
-    line += coordinate_pieces[0]
-    for i in 1..4
-      if !coordinate_pieces[i].match(/\.\d{#{@@coordinate_pad_precision + 1}}/)
-        current_num = coordinate_pieces[i].to_f()
-        line += " " + "%.#{@@coordinate_pad_precision}f" % current_num
-      else
-        line += " " + coordinate_pieces[i]
-      end
-    end
-    line += " ;\n"
-    # Add coordinate to list.
-    @coordinates.push(line)
+
+    @coordinates = Array.new
+    @coordinate_lines = Array.new  # NEW: Store line numbers with coordinates
+    
     line = get_next_line(file, index)
     
     $log.debug((index.value + 1).to_s + ":" + line)
     
+    until line.match(/(LAYER)|(END)/)
+      if line.match(/\S;\s*$/)
+        error_msg = (index.value + 1).to_s + "\n"
+        @errors[:line_ending_semicolons].push(error_msg)
+        line = line.gsub(/;\s*$/, " ;\n")
+      end
+      
+      # Store the current line number
+      current_line_num = index.value + 1
+      
+      # Force coordinate numbers to be written with three decimal places of precision.
+      coordinate_pieces = line.split()
+      line  = line.split(/\w/)[0]
+      # line.match(/^(\s*)/){ |m| line = 1 }
+      line += coordinate_pieces[0]
+      for i in 1..4
+        if !coordinate_pieces[i].match(/\.\d{#{@@coordinate_pad_precision + 1}}/)
+          current_num = coordinate_pieces[i].to_f()
+          line += " " + "%.#{@@coordinate_pad_precision}f" % current_num
+        else
+          line += " " + coordinate_pieces[i]
+        end
+      end
+      line += " ;\n"
+      
+      # Add coordinate to list with line number
+      @coordinates.push(line)
+      @coordinate_lines.push(current_line_num)  # Store line number
+      
+      line = get_next_line(file, index)
+      
+      $log.debug((index.value + 1).to_s + ":" + line)
+    end
   end
-end
+  
+  # Add method to get line number for a coordinate
+  def line_number_for_coordinate(coord_index)
+    @coordinate_lines[coord_index]
+  end
   def sort!()
     @coordinates = @coordinates.sort {
       |a, b|
@@ -640,11 +792,6 @@ end
     @coordinates.each do |line|
       outFile.print line
     end
-    
-    # Print VIAs that were inside this layer
-    @vias_in_layer.each do |via|
-      outFile.print via['line']
-    end
   end
   def compare_to(other_layer)
     if @coordinates.length() != other_layer.coordinates().length()
@@ -664,15 +811,41 @@ end
 end
 
 class LayerCollection
+
   @@layer_order_selected = "s40"
   @@layer_orders = Hash.new
+  # TODO: make techfile or TLEF required for Layer checks, these lists
   @@layer_orders["s40"] = Array["LP_HVTP","LP_HVTN","CONT", "ME1", "VI1", "ME2","VI2","ME3"]
   @@layer_orders["abc"] = Array["met2", "via", "met1", "mcon", "li1", "nwell", "pwell"]
 
-  attr_reader :layers, :vias
-  
+  attr_reader :layers
+  # Either an Obstruction or a Port.
   def self.start_line?(line)
     return line.match(/^\s*(OBS)|(PORT)/)
+  end
+  
+  # New method to identify CUT layers (vias)
+  def self.cut_layer?(layer_name)
+    return false if layer_name.nil? || layer_name.empty?
+    
+    # Clean the layer name first (remove extra whitespace)
+    clean_name = layer_name.strip
+    
+    # Common via/cut layer names - use =~ for Ruby compatibility
+    cut_patterns = [/^via\d*$/i, /^v\d+$/i, /^cut\d*$/i, /^contact$/i]
+    cut_patterns.any? { |pattern| clean_name =~ pattern }
+  end
+  
+  # New method to identify ROUTING layers (metals)
+  def self.routing_layer?(layer_name)
+    return false if layer_name.nil? || layer_name.empty?
+    
+    # Clean the layer name first
+    clean_name = layer_name.strip
+    
+    # Common metal layer names - use =~ for Ruby compatibility
+    routing_patterns = [/^met\d+$/i, /^metal\d*$/i, /^m\d+$/i, /^li\d*$/i]
+    routing_patterns.any? { |pattern| clean_name =~ pattern }
   end
   
   def self.layer_order=(new_order)
@@ -683,11 +856,13 @@ class LayerCollection
       @@layer_order_selected = new_order
     end
   end
-  
   def self.layer_order()
     return @@layer_order_selected
   end
-
+  #
+  # changes layer orders in the event that a tlef/tf file is found, otherwise
+  # uses the default.
+  #
   def self.use_tlef_layers(new_layers)
     new_layer_order = "from_tlef"
     @@layer_orders[new_layer_order] = new_layers
@@ -697,134 +872,43 @@ class LayerCollection
   def self.recognized_layer?(name)
     return @@layer_orders[@@layer_order_selected].include?(name.split()[0])
   end
-  
   def initialize(file, index, errors)
     line = get_current_line(file, index)
     if !LayerCollection::start_line?(line)
       raise "Error: Attempted to initialize Obstruction or Port, but file location provided did not start at an Obstruction or Port."
     end
     @start_line = line
-    @start_line_num = index.value + 1
     @layers = Hash.new
-    @vias = Array.new
     @errors = errors
     line = get_next_line(file, index)
-    
-    while(Layer::start_line?(line) || via_start_line?(line))
-      if Layer::start_line?(line)
-        new_layer = Layer.new(file, index, errors)
-        @layers[new_layer.name] = new_layer
-        
-        # Collect VIAs that were inside this layer (they have a layer association)
-        new_layer.vias_in_layer.each do |via_info|
-          via_name = extract_via_name(via_info['line'])
-          @vias.push({
-            'line' => via_info['line'],
-            'name' => via_name,
-            'line_num' => via_info['line_num'],
-            'section_start' => @start_line_num,
-            'associated_layer' => new_layer.name
-          })
-        end
-        
-      elsif via_start_line?(line)
-        # This VIA is outside any LAYER block (no association)
-        via_name = extract_via_name(line)
-        @vias.push({
-          'line' => line.dup,
-          'name' => via_name,
-          'line_num' => index.value + 1,
-          'section_start' => @start_line_num,
-          'associated_layer' => nil
-        })
-        line = get_next_line(file, index)
-      end
+    while(Layer::start_line?(line))
+      new_layer = Layer.new(file, index, errors)
+      @layers[new_layer.name] = new_layer
       line = get_current_line(file, index)
     end
     @end_line = line
     get_next_line(file, index)
-    
-    # Check VIA-OBS associations and generate warnings
-    check_via_obs_associations()
   end
-  
-  def via_start_line?(line)
-    return line.match(/^\s*VIA/)
-  end
-  
-  def parse_via(line, file, index, errors, associated_layer)
-    via_line = line.dup
-    via_name = extract_via_name(line)
-    
-    return {
-      'line' => via_line,
-      'name' => via_name,
-      'line_num' => index.value + 1,
-      'section_start' => @start_line_num,
-      'associated_layer' => associated_layer
-    }
-  end
-  
-  def extract_via_name(line)
-    # VIA statement format: VIA [MASK maskNum] pt viaName ;
-    parts = line.split
-    via_name = nil
-    
-    # Look for the via name (should be before the semicolon)
-    parts.each_with_index do |part, i|
-      if part == ';' && i > 0
-        via_name = parts[i-1]
-        break
-      end
-    end
-    
-    # Fallback: if no semicolon found, take the last non-empty word
-    via_name ||= parts.reject { |p| p.empty? }[-1]
-    
-    return via_name
-  end
-  
-  def check_via_obs_associations()
-    # Check each VIA individually and generate warnings for those without layers
-    @vias.each do |via|
-      if via['associated_layer'].nil?
-        # This VIA has no associated layer - generate WARNING
-        warning_msg = "Line #{via['line_num']}: '#{via['name']}' in OBS/PORT section has no associated OBS layer\n"
-        @errors[:via_missing_obs_layer].push(warning_msg)
-      end
-    end
-  end
-  
   def sort!()
     @layers.each_value{|layer| layer.sort!()}
   end
-  
   def print(outFile)
     outFile.print @start_line
     sorted_layer_names = @layers.keys().sort{ |a, b| layer_name_sort(a, b) }
     sorted_layer_names.each do |key|
       @layers[key].print(outFile)
     end
-    
-    # Print VIA statements
-    @vias.each do |via|
-      outFile.print via['line']
-    end
-    
     outFile.print @end_line
   end
-  
   def [](ind)
     return @layers[ind]
   end
-  
   def layer_name_sort(a, b)
     layer_order = @@layer_orders[@@layer_order_selected]
     a_key = a.split()[0]
     b_key = b.split()[0]
     return sort_by_property_list(layer_order, a_key, b_key, a<=>b)
   end
-  
   def compare_to(other_collection)
     these_keys = @layers.keys().sort()
     those_keys = other_collection.layers().keys().sort()
@@ -841,28 +925,15 @@ class LayerCollection
     if !those_keys[index].nil?
       return 1
     end
-    
+    # Ports contain identical lists of keys.
+    # Sort by comparing the layers they contain.
     these_keys.each do |key|
       comparison = @layers[key].compare_to(other_collection.layers()[key])
       if comparison != 0
         return comparison
       end
     end
-    
-    if @vias.length != other_collection.vias.length
-      return @vias.length <=> other_collection.vias.length
-    end
-    
-    @vias.zip(other_collection.vias).each do |via_a, via_b|
-      comparison = via_a['line'] <=> via_b['line']
-      return comparison if comparison != 0
-    end
-    
     return 0
-  end
-  
-  def vias
-    return @vias
   end
 end
 
@@ -1010,6 +1081,7 @@ def parse_ws_dir(opts)
   return proj_dir, liberty_dirpath, liberty_files, lef_files, tlef_files
 end
 
+################################## LEF Parsing (TODO: needs to be method)
 # LEF Parsing (TODO: needs to be method) (This is completed)
 def parse_lef_files(opts, lef_files, tlef_files, errors)
   # Set layer ordering
@@ -1032,7 +1104,7 @@ def parse_lef_files(opts, lef_files, tlef_files, errors)
     LayerCollection::use_tlef_layers(new_layers)
   end
   puts ""
-
+  
   # if we just have one lef specified by the options, use that
   if lef_files.nil? || lef_files.empty?
     lef_files = [opts.lef]
@@ -1115,6 +1187,7 @@ def parse_lef_files(opts, lef_files, tlef_files, errors)
     parsed_lef_file.sort!()
     parsed_lef_files[lef_file_path] = parsed_lef_file
   }
+  
   return parsed_lef_files, reportDirectoryName
 end
 
@@ -1392,7 +1465,6 @@ def compare_lef_lib(parsed_lef_files, liberty_data, errors)
       end
       errors[:lef_missing_pin].push(lef_missing_pins_msg)
     end
-
 end
 
 # Print file and errors (TODO: needs to be method) (This is completed)
@@ -1408,7 +1480,6 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
     print "Printing sorted LEF file [#{lefcount}/#{parsed_lef_files.length}] to '" + lef_filename + "                   \r"
     $stdout.flush
     output_filename = lef_filename + "_sorted"
-
     # TODO: use block format for File.open (This is now complete)
     begin
       File.open(output_filename, "w") do |outFile|
@@ -1423,14 +1494,14 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
       # Creating the necessary subdirectories within the report directory, found in user's home.
       reportDirectoryCommand = "mkdir ~/'#{reportDirectoryName}'" 
       system(reportDirectoryCommand + "/sortedFiles")
-        
+
       # Creating sorted_lef filename and path to go in user's report directory.
       output_filename = ENV['HOME'] + "/" + reportDirectoryName + "/sortedFiles/" + File.basename(output_filename)
       File.open(output_filename, "w") do |outFile|
         parsed_lef_file.print(outFile)
       end # outFile is automatically closed here
+
     end
-    
     # First, check if there are ANY errors at all
     has_errors = false
     errors.keys().each do |error_type|
@@ -1439,7 +1510,7 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
         break
       end
     end
-
+    
     # If there were errors, open the error file ONCE and write all errors to it
     if has_errors
       error_filename = lef_filename + "_errors"
@@ -1447,8 +1518,8 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
       begin
         # TODO: use block format for File.open (This is now complete)
         File.open(error_filename, "w") do |error_file|
-        
-          error_types = errors.keys()
+            
+        error_types = errors.keys()
           error_count = 1 #counter to track tests
           error_header_end = "--------------------------------------------------------------\n"
           error_footer =     "--------------------------------------------------------------\n"
@@ -1496,9 +1567,6 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
                 error_description += "Error: The following pins do not have a DIRECTION defined.\n"
               when :missing_use
                 error_description += "Error: The following pins do not have a USE defined.\n"
-              when :via_missing_obs_layer
-                error_description += "Error: The following VIAS do not have associated OBS layers.\n"
-                error_description += "VIAS in OBS sections should have corresponding layer definitions.\n"
               when :lef_missing_cell
                 error_description += "Error: The following cells were found in Liberty files, but not in the LEF file.\n"
               when :lef_missing_pin
@@ -1511,7 +1579,10 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
                 error_description += "Error: The following cells had a SIZE property that was inconsistent with the AREA stated in the following Liberty files.\n"
               when :liberty_incorrect_pin_property
                 error_description += "Error: The following cells have mismtached values between LIB and LEF.\n" 
-              end # end case
+              when :missing_via_obs
+                error_description += "Warning: Vias missing associated OBS layers.\n"
+                error_description += "Vias should have OBS rectangles on adjacent metal layers for proper keep-out zones.\n"
+              end
               
               error_description += error_header_end
               puts "\nTest [#{error_count}/#{error_types.length}] \'" + error_type.to_s() + "\' failed."
@@ -1546,14 +1617,12 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
       rescue Errno::EACCES => e
         # make correct filepath to the report directory within users home.
         puts "You cannot place error files here, placing them in report directory (see home directory)."
-        
         # Ensure that errorFile subdirectory exists within report directory.
         reportDirectoryCommand = "mkdir ~/'#{reportDirectoryName}'"
         system(reportDirectoryCommand + "/errorFiles")
           
         # Creating filepath and name for error file to be sent to user's report directory (within home directory).
         error_filename = ENV['HOME'] + "/" + reportDirectoryName + "/errorFiles/" + File.basename(error_filename)
-        
         # Re-run the entire write logic, but with the new filename
         File.open(error_filename, "w") do |error_file|
           # (The entire error-writing loop is duplicated here)
@@ -1602,7 +1671,7 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
                 error_description += "Error: The following pins do not have a DIRECTION defined.\n"
               when :missing_use
                 error_description += "Error: The following pins do not have a USE defined.\n"
-              when :via_missing_obs_layer
+              when :missing_via_obs
                 error_description += "Error: The following VIAS do not have associated OBS layers.\n"
                 error_description += "VIAS in OBS sections should have corresponding layer definitions.\n"
               when :lef_missing_cell
@@ -1649,7 +1718,7 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
       end # end begin/rescue
       
     end # end if has_errors
-  
+    
     lefcount += 1
   puts "\nFiles created are placed here: "
 	puts reportDirectoryName
@@ -1688,7 +1757,7 @@ def main(opts)
   errors[:strange_direction]            = Array.new
   errors[:missing_use]                  = Array.new
   errors[:strange_use]                  = Array.new
-  errors[:via_missing_obs_layer]        = Array.new
+  errors[:missing_via_obs]              = Array.new
   
   # These are added for the lib compare methods
   errors[:lef_missing_cell]             = Array.new
