@@ -263,7 +263,8 @@ class Cell
       if Pin::start_line?(line)
         # look for things that should be under the pins and add it to the pins of the Cell
         new_pin = Pin.new(file, index, errors, @name)
-        @pins[new_pin.name] = new_pin
+		#make all pin comparison uppercase
+        @pins[new_pin.name.upcase] = new_pin
       elsif LayerCollection::start_line?(line)
         # look for things under a layer collection and add it ot the obstructiosn of the Cell
         new_obstruction = LayerCollection.new(file, index, errors)
