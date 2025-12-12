@@ -7,6 +7,11 @@
 #
 # =AUTHORS: Tanner Palin, Michael Kamb, Mark Angulo
 #
+# Fall 2025 revision control lives here:
+# 
+#
+# =AUTHOR:  Abrahim Hamdan, Ash Huang, Benjamin Perry
+#
 # =DESCRIPTION: 
 #     Reads a LEF file and sorts the data numerically.
 #     Checks pin direction between LEF and .lib file.
@@ -339,26 +344,36 @@ class LEF_File
     check_for_uncommon_properties(@errors[:strange_direction], Pin::directions_found)
     check_for_uncommon_properties(@errors[:strange_use], Pin::uses_found)
   end
+
   def sort!()
     @cells.each_value{|cell| cell.sort!()}
   end
-  def print(outFile)
+
+  # Refactored: Returns a string instead of printing directly
+  def to_s
+    output = ""
     @header.each do |line|
-      outFile.print line
+      output += line
     end
+    
     if !(@property_definitions.nil?)
-      outFile.print @property_definitions_start
+      output += @property_definitions_start
       @property_definitions.each do |line|
-        outFile.print line
+        output += line
       end
-      outFile.print @property_definitions_end
+      output += @property_definitions_end
     end
+    
     sortedCellKeys = @cells.keys.sort()
     sortedCellKeys.each do |key|
-      @cells[key].print(outFile)
+      # CALLING to_s HERE instead of print
+      output += @cells[key].to_s
     end
-    outFile.print @end_line if @end_line
+    
+    output += @end_line if @end_line
+    return output
   end
+
   def [](ind)
     @cells[ind]
   end
@@ -374,21 +389,26 @@ class Cell
     return false if line.nil?
     return line.match(/^MACRO\s+([\w\d_]+)/)
   end
+
   def self.register_property(target_hash, property_key, message)
     if target_hash[property_key].nil?
       target_hash[property_key] = Array.new
     end
     target_hash[property_key].push(message)
   end
+
   def self.classes_found
     return @@classes_found
   end
+
   def self.symmetries_found
     return @@symmetries_found
   end
+
   def self.sites_found
     return @@sites_found
   end
+
   def initialize(file, index, errors)
     class_found = false
     origin_found = false
@@ -433,40 +453,39 @@ class Cell
         if split_line[0] == "PROPERTY"
           @keywordProperties.push(line)
         else
-          # TODO: should be case split_line[0]
-          if split_line[0] == "ORIGIN"
+          # Store the line regardless of what type it is
+          @properties.push(line)
+
+          # TODO: should be case split_line[0] (This is now complete)
+          case split_line[0]
+          when "ORIGIN"
             origin_found = true
             if split_line[1] != "0" || split_line[2] != "0" then
               @errors[:strange_origin].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
             end
-          end
-          if split_line[0] == "FOREIGN"
+          when "FOREIGN"
             if split_line[2] != "0" || split_line[3] != "0" then
               @errors[:strange_foreign].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
             end
-          end
-          if split_line[0] == "CLASS"
+          when "CLASS"
             class_found = true
             Cell::register_property(@@classes_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SIZE"
+          when "SIZE"
             size_found = true
-          end
-          if split_line[0] == "SYMMETRY"
+          when "SYMMETRY"
             symmetry_found = true
             Cell::register_property(@@symmetries_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SITE"
+          when "SITE"
             site_found = true
             Cell::register_property(@@sites_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SOURCE"
+          when "SOURCE"
             source_found = true
-          end
-          @properties.push(line)
-          if !(@@PropertyOrder.include? line.split[0].upcase)
-            error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
-            @errors[:unknown_cell_property].push error_msg
+          else
+            # If it's not a standard keyword, check if it's in the allowed list
+            if !(@@PropertyOrder.include? line.split[0].upcase)
+              error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
+              @errors[:unknown_cell_property].push error_msg
+            end
           end
         end
         get_next_line(file, index)
@@ -607,32 +626,37 @@ class Cell
     }
     @keywordProperties.sort!()
   end
-  def print(outFile)
-    # print sorted cell properties to a file
-    # TODO: probably should have to do a sort before this, so sort! should be private and called here
-    # TODO: writing to a file all over the place is inadvisable, it would be better to ouput a string 
-    # that we the output all at once somewhere else.
-    outFile.print @start_line
+
+  # TODO: probably should have to do a sort before this, so sort! should be private and called here
+  # TODO: writing to a file all over the place is inadvisable, it would be better to ouput a string that we the output all at once somewhere else. (This is now complete)
+  # Refactored: Returns a string instead of printing directly
+  def to_s
+    output = ""
+    output += @start_line
+    
     @properties.each do |line|
-      outFile.print line
+      output += line
     end
+    
     sortedPinKeys = @pins.keys.sort()
     sortedPinKeys.each do |key|
-      @pins[key].print(outFile)
+      # CALLING to_s HERE instead of print
+      output += @pins[key].to_s
     end
+    
     if(!@obstructions.nil?)
-      @obstructions.print(outFile)
+      # CALLING to_s HERE instead of print
+      output += @obstructions.to_s
     end
+    
     @keywordProperties.each do |line|
-      outFile.print line
+      output += line
     end
 
-    outFile.print @end_line
-    outFile.print "\n"
-  end
-  def [](ind)
-    # associate pins to the index of the cells
-    @pins[ind]
+    output += @end_line
+    output += "\n"
+    
+    return output
   end
 end
 
@@ -648,22 +672,27 @@ class Pin
   ]
   @@directions_found = Hash.new
   @@uses_found = Hash.new
+
   def self.directions_found
     return @@directions_found
   end
+
   def self.uses_found
     return @@uses_found
   end
+
   def self.start_line?(line)
     return false if line.nil?
     return line.match(/^\s*PIN\s+/)
   end
+
   def self.register_property(target_hash, property_key, message)
     if target_hash[property_key].nil?
       target_hash[property_key] = Array.new
     end
     target_hash[property_key].push(message)
   end
+
   # TODO: initialize should not do any work, seperate into a function that gets called by user
   def initialize(file, index, errors, parent_cell_name)
     line = get_current_line(file, index)
@@ -744,22 +773,27 @@ class Pin
     }
     @keywordProperties.sort!()
   end
-  def print(outFile)
-    outFile.print @start_line
+
+ # Refactored: Returns a string instead of printing directly
+  def to_s
+    output = ""
+    output += @start_line
     
     @properties.each do |line|
-      outFile.print line
+      output += line
     end
+    
+    # Calls the to_s method of LayerCollection
     @ports.each do |port|
-      port.print(outFile)
+      output += port.to_s 
     end
+    
     @keywordProperties.each do |line|
-      outFile.print line
+      output += line
     end
-    outFile.print @end_line
-  end
-  def [](ind)
-    return @layers[ind]
+    
+    output += @end_line
+    return output
   end
 end
 
@@ -868,13 +902,19 @@ class Layer
     end
     return result
   end
-  def print(outFile)
-    outFile.print @start_line
+
+  # Refactored: Returns a string instead of printing directly
+  def to_s
+    output = ""
+    output += @start_line
     
     @coordinates.each do |line|
-      outFile.print line
+      output += line
     end
+    
+    return output
   end
+
   def compare_to(other_layer)
     if @coordinates.length() != other_layer.coordinates().length()
       return @coordinates.length() <=> other_layer.coordinates().length()
@@ -1055,26 +1095,45 @@ class LayerCollection
     @end_line = line
     get_next_line(file, index)
   end
+
   def sort!()
     @layers.each_value{|layer| layer.sort!()}
   end
-  def print(outFile)
-    outFile.print @start_line
+
+  # Refactored: Returns a string instead of printing directly
+  def to_s
+    output = ""
+    output += @start_line
     sorted_layer_names = @layers.keys().sort{ |a, b| layer_name_sort(a, b) }
+    
     sorted_layer_names.each do |key|
-      @layers[key].print(outFile)
+      # CALLING to_s HERE instead of print
+      output += @layers[key].to_s
     end
-    outFile.print @end_line
+    
+    # Print VIA statements (if any)
+    # LayerCollection handles both OBS and PORTs, so vias might be here
+    if defined?(@vias) && @vias
+        @vias.each do |via|
+            output += via['line']
+        end
+    end
+
+    output += @end_line
+    return output
   end
+
   def [](ind)
     return @layers[ind]
   end
+
   def layer_name_sort(a, b)
     layer_order = @@layer_orders[@@layer_order_selected]
     a_key = a.split()[0]
     b_key = b.split()[0]
     return sort_by_property_list(layer_order, a_key, b_key, a<=>b)
   end
+
   def compare_to(other_collection)
     these_keys = @layers.keys().sort()
     those_keys = other_collection.layers().keys().sort()
@@ -1707,7 +1766,8 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
     # TODO: use block format for File.open (This is now complete)
     begin
       File.open(output_filename, "w") do |outFile|
-        parsed_lef_file.print(outFile)
+        # REFACTORED: Write the big string all at once
+        outFile.print parsed_lef_file.to_s
       end # outFile is automatically closed here
 
     # Rescues if user does not have permissions to place sorted LEF files within DDC.
@@ -1722,7 +1782,8 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
       # Creating sorted_lef filename and path to go in user's report directory.
       output_filename = ENV['HOME'] + "/" + reportDirectoryName + "/sortedFiles/" + File.basename(output_filename)
       File.open(output_filename, "w") do |outFile|
-        parsed_lef_file.print(outFile)
+        # REFACTORED: Write the big string all at once
+        outFile.print parsed_lef_file.to_s
       end # outFile is automatically closed here
     end
     # First, check if there are ANY errors at all
