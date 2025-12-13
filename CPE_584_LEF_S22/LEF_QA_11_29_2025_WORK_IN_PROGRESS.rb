@@ -384,10 +384,8 @@ class LEF_File
     
     # find properties that are strange, (TODO: should be deprecated) (COMPLETED: Deprecated and Removed)
     
-  end
-
-  def sort!()
-    @cells.each_value{|cell| cell.sort!()}
+    # Automatically sort
+    sort!()
   end
   
   # Refactored: Returns a string instead of printing directly
@@ -416,6 +414,12 @@ class LEF_File
   end
   def [](ind)
     @cells[ind]
+  end
+
+  private # Private section for sort!
+
+  def sort!()
+    # cells sort themselves automatically
   end
 end
 
@@ -562,6 +566,9 @@ class Cell
     else
       @errors[:missing_cell_end].push("Line " + (parser.index + 1).to_s() + ": " + @name + "\n")
     end
+
+    # Automatically sort
+    sort!()
   end
   
   # Check if vias have associated OBS layers
@@ -648,23 +655,7 @@ class Cell
     return "" if name.nil?
     name.strip.split()[0].upcase
   end
-  
-  # TODO: probably should have to do a sort before this, so sort! should be private and called here (NOT DONE)
-  def sort!()
-    @pins.each_value{|pin| pin.sort!()}
-    if(!@obstructions.nil?)
-      @obstructions.sort!()
-    end
-    @properties.sort!{ |a, b|
-      a_key = ""
-      b_key = ""
-      a.match(/\A\s*([\w\d_]+)/){ |m| a_key = m[1]}
-      b.match(/\A\s*([\w\d_]+)/){ |m| b_key = m[1]}
-      sort_by_property_list(@@PropertyOrder, a_key, b_key, a<=>b)
-    }
-    @keywordProperties.sort!()
-  end
-  
+
   # Refactored: Returns a string instead of printing directly
   # TODO: writing to a file all over the place is inadvisable, 
   # it would be better to ouput a string (COMPLETED: Converted to to_s method)
@@ -698,7 +689,26 @@ class Cell
     # associate pins to the index of the cells
     @pins[ind]
   end
+
+# TODO: probably should have to do a sort before this, 
+# so sort! should be private and called here (This is completed)
+private # Make sort private
+
+  # Refactored: Moved sort here and removed child sorting calls
+  def sort!()
+    # Pins and Obstructions now sort themselves automatically on init
+    
+    @properties.sort!{ |a, b|
+      a_key = ""
+      b_key = ""
+      a.match(/\A\s*([\w\d_]+)/){ |m| a_key = m[1]}
+      b.match(/\A\s*([\w\d_]+)/){ |m| b_key = m[1]}
+      sort_by_property_list(@@PropertyOrder, a_key, b_key, a<=>b)
+    }
+    @keywordProperties.sort!()
+  end
 end
+
 
 class Pin
   attr_reader :properties, :keywordProperties, :name, :ports
@@ -802,6 +812,9 @@ class Pin
     end
     @end_line = line
     @parser.next
+
+    # Automatically sort
+    sort!()
   end
   
   def sort!()
@@ -840,6 +853,18 @@ class Pin
   end
   def [](ind)
     return @layers[ind]
+  end
+
+  private # Private section for sort!
+
+  def sort!()
+    @ports = @ports.sort{ |a, b| a.compare_to(b) }
+    @properties = @properties.sort{ |a, b|
+      a_key = a.split()[0].upcase
+      b_key = b.split()[0].upcase
+      sort_by_property_list(@@PropertyOrder, a_key, b_key, a<=>b)
+    }
+    @keywordProperties.sort!()
   end
 end
 
@@ -913,22 +938,14 @@ class Layer
       
       $log.debug((parser.index + 1).to_s + ":" + line.to_s)
     end
+
+    # Automatically sort
+    sort!()
   end
   
   def line_number_for_coordinate(coord_index)
     return @start_line_num if @coordinate_line_numbers.nil? || @coordinate_line_numbers.empty?
     @coordinate_line_numbers[coord_index] || @start_line_num
-  end
-  
-  def sort!()
-    if @coordinate_line_numbers && @coordinate_line_numbers.length == @coordinates.length
-      paired = @coordinates.zip(@coordinate_line_numbers)
-      paired.sort! { |a, b| Layer::coordSort(a[0], b[0]) }
-      @coordinates = paired.map { |p| p[0] }
-      @coordinate_line_numbers = paired.map { |p| p[1] }
-    else
-      @coordinates = @coordinates.sort { |a, b| Layer::coordSort(a, b) }
-    end
   end
   
   def self.coordSort(a, b) 
@@ -976,6 +993,38 @@ class Layer
       end
     end
     return 0
+  end
+
+  private # Private section for sort! and self.coordSort
+  
+  def sort!()
+    if @coordinate_line_numbers && @coordinate_line_numbers.length == @coordinates.length
+      paired = @coordinates.zip(@coordinate_line_numbers)
+      paired.sort! { |a, b| Layer::coordSort(a[0], b[0]) }
+      @coordinates = paired.map { |p| p[0] }
+      @coordinate_line_numbers = paired.map { |p| p[1] }
+    else
+      @coordinates = @coordinates.sort { |a, b| Layer::coordSort(a, b) }
+    end
+  end
+  
+  def self.coordSort(a, b) 
+    aspl = a.split()
+    bspl = b.split()
+    result = 0
+    if aspl[0] != bspl[0]
+      result = aspl[0] <=> bspl[0]
+    else
+      aspl.zip(bspl).each do |aword, bword|
+        af = aword.to_f()
+        bf = bword.to_f()
+        if af != bf
+          result = af <=> bf
+          break
+        end
+      end
+    end
+    return result
   end
 end
 
@@ -1143,10 +1192,9 @@ class LayerCollection
     end
     @end_line = line
     parser.next
-  end
-  
-  def sort!()
-    @layers.each_value{|layer| layer.sort!()}
+
+    # Automatically sort
+    sort!()
   end
   
   # Refactored: Returns a string instead of printing directly
@@ -1200,6 +1248,12 @@ class LayerCollection
       end
     end
     return 0
+  end
+
+  private # Private section for sort!
+
+  def sort!()
+    # layers now sort themselves automatically
   end
 end
 
@@ -1507,7 +1561,6 @@ def parse_lef_files(opts, lef_files, tlef_files, errors)
     end 
 
     parsed_lef_file = LEF_File.new(lefLines, errors)
-    parsed_lef_file.sort!()
     parsed_lef_files[lef_file_path] = parsed_lef_file
   }
   
