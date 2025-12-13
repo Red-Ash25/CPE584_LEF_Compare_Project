@@ -383,12 +383,9 @@ class LEF_File
     @end_line = line
     
     # find properties that are strange, (TODO: should be deprecated) (COMPLETED: Deprecated and Removed)
-    # check_for_uncommon_properties(@errors[:strange_class], Cell::classes_found)
-    # check_for_uncommon_properties(@errors[:strange_symmetry], Cell::symmetries_found)
-    # check_for_uncommon_properties(@errors[:strange_site], Cell::sites_found)
-    # check_for_uncommon_properties(@errors[:strange_direction], Pin::directions_found)
-    # check_for_uncommon_properties(@errors[:strange_use], Pin::uses_found)
+    
   end
+
   def sort!()
     @cells.each_value{|cell| cell.sort!()}
   end
@@ -553,11 +550,7 @@ class Cell
       @errors[:missing_size].push("Line " + @start_line_num.to_s() + ": " + @name + "\n")
     end
 
-    # TODO: If SOURCE is part of LEF syntax, then add this code to script, otherwise delete code (NOT DONE)
-    # TODO: Also need to add "missing_source" key to errors array (NOT DONE)
-    #if !source_found
-    #  @errors[:missing_source].push("Line " + @start_line_num.to_s() + ": " + @name + "\n")
-    #end
+    # NOTE: SOURCE checking logic was deprecated/removed as per TODO.
 
     # make sure you have end line
     if !line.nil? && line.match(/^END/)
@@ -1227,28 +1220,11 @@ def sort_by_property_list(list, a, b, tiebreaker)
   return 0
 end
 
-#
 # find properties that are strange, (TODO: should be deprecated)
-#
-def check_for_uncommon_properties(error_array, property_hash)
-  rarity_factor_cutoff = 5
-  property_type_count = property_hash.keys().length()
-  total_property_count = 0
-  property_hash.keys().each do |key|
-    total_property_count += property_hash[key].length()
-  end
-  property_hash.keys().each do |key|
-    if property_hash[key].length() < (total_property_count / property_type_count) / rarity_factor_cutoff 
-      property_hash[key].each do |line|
-        error_array.push(line)
-      end
-    end
-  end
-end
+# Deleted def check_for_uncommon_properties as stated above
 
 # TODO: collect all of the "get_current_line" and file related methods 
 # and store them under one function class or File wrapper object
-
 
 # class for housing the different syntax rules and comparison checks against the liberty file
 # TODO: collect preexisting rules and move them here, do the same for lef and tlef
