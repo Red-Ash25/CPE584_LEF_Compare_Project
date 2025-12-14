@@ -1,3 +1,4 @@
+
 #! /usr/bin/ruby -W0
 #
 # =FILE:   lef_QA.rb
@@ -1282,135 +1283,95 @@ end
 
 # class for housing the different syntax rules and comparison checks against the liberty file
 # TODO: collect preexisting rules and move them here, do the same for lef and tlef
+#
+# class for housing the different syntax rules and comparison checks against the liberty file
+# TODO: collect preexisting rules and move them here, do the same for lef and tlef
+#
 class LibRuleChecker
   def self.check_pin_value_in_lef(lib_path, lef_path, lef_pin, lib_pin, lib_pin_prop_key, cell)
     errors = []
-    lib_pin_name = lib_pin.name
-    lib_pin_prop = lib_pin.property(lib_pin_prop_key)
+    pin_name = lib_pin.name
+    prop_key = lib_pin_prop_key.to_s.upcase
 
-    if lib_pin_prop.nil?
-      errors << "#{cell}\n\tFiles: #{lib_path}, #{lef_path}, \n\tPin: #{lib_pin_name}, \n\tProperty: #{lib_pin_prop_key}, Property in LIB is NIL\n"
-      return errors
-    else 
-      lib_pin_prop = lib_pin_prop.gsub(/[\";]/, '').strip.upcase
-    end
-
-    lef_prop_key = lib_pin_prop_key.upcase()
-    lef_prop_name_re = /^\s*#{lef_prop_key}(.*)/
-    lef_prop_val_re = /.*#{lib_pin_prop.gsub(/[\"\n;]/, '')}.*/
-    lef_pin_prop_str = []
-
+    # Fetch LIB value 
     lib_val = lib_pin.property(lib_pin_prop_key)
-    lef_has_key = lef_pin.properties.any? { |p| p.strip.upcase.start_with?(lib_pin_prop_key.upcase) }
+    return errors if lib_val.nil?
 
-    # Skip if LIB does not define the property OR LEF does not define the property
-    unless lib_val && lef_has_key
-      return errors
-    end
+    lib_val = lib_val.to_s.gsub(/[\";]/, "").strip.upcase
 
-    if lib_pin_prop_key.upcase == "DIRECTION"
-      puts "CELL=#{cell} PIN=#{lib_pin_name} — Checking DIRECTION"
-
-      # Normalize Liberty direction
-      lib_dir = lib_pin.property("direction")
-      lib_dir = lib_dir.to_s.gsub(/[\";]/, "").strip.upcase
-      # Find LEF direction lines
-      lef_dir_lines = lef_pin.properties.select do |prop_str|
-        prop_str.strip.upcase.start_with?("DIRECTION")
+    case prop_key
+    when "VOLTAGE_NAME"
+      lib_pin_name = lib_pin.name.to_s.strip.upcase
+      unless lib_val == lib_pin_name
+        errors << "#{cell}\n\tPin #{lib_pin_name}: VOLTAGE_NAME mismatch — voltage_name=#{lib_val}\n"
+      end     
+    when "RELATED_POWER_PIN"
+      ref_name = lib_val.upcase
+      unless ref_name.match?(/^(VPWR|VPB|VDD|VDDIO|VCC)/)
+        errors << "#{cell}\n\tPin #{pin_name}: related_power_pin '#{ref_name}' does not look like a power pin name\n"
       end
-      if lef_dir_lines.empty?
+    when "RELATED_GROUND_PIN"
+      ref_name = lib_val.upcase
+      unless ref_name.match?(/^(VGND|VNB|VSS)/)
+        puts "ref name #{ref_name}"
+        errors << "#{cell}\n\tPin #{pin_name}: related_ground_pin '#{ref_name}' does not look like a ground pin name\n"
+      end
+    when "DIRECTION"
+     #puts "CHECKING Direction:  #{cell} #{lib_pin.name} #{lib_pin_prop_key}"
+      lef_lines = lef_pin.properties.select do |l|
+        l.strip.upcase.start_with?("DIRECTION")
+      end
+      if lef_lines.empty?
+        errors << "#{cell}\n\tPin #{pin_name}: Missing LEF DIRECTION (LIB=#{lib_val})\n"
         return errors
       end
-      # Extract LEF direction from the first token after "DIRECTION"
-      lef_dir = lef_dir_lines.first.split[1].gsub(/[\";]/, "").strip.upcase
-      # Compare exactly, no special cases
-      unless lef_dir == lib_dir
-        puts "  ERROR: Direction mismatch LIB=#{lib_dir}, LEF=#{lef_dir}"
-        errors << "#{cell}\n\tPin #{lib_pin_name}: DIRECTION mismatch — LIB=#{lib_dir}, LEF=#{lef_dir}\n"
+      lef_val = lef_lines.first.split[1].gsub(/[\";]/, "").strip.upcase
+      lib_val_normalized = lib_val.to_s.upcase.gsub(/[\";]/, "").strip
+      #puts "DEBUG: lef_val='#{lef_val}', lib_val_normalized='#{lib_val_normalized}'"
+      unless lef_val == lib_val_normalized
+        errors << "#{cell}\n\tPin #{pin_name}: DIRECTION mismatch — LIB=#{lib_val_normalized}, LEF=#{lef_val}\n"
       end
-##wrong logic 
-=begin
-    elsif lib_pin_prop_key.upcase == "PG_TYPE"
-      puts "CELL=#{cell} PIN=#{lib_pin_name} — Checking PG_TYPE"
-
-      # Normalize LIB value
-      lib_pg_val = lib_pin.property("pg_type")
-      lib_pg_val = lib_pg_val.to_s.gsub(/[\";]/, "").strip.upcase
-      lib_pg_val = "" if lib_pg_val.nil? || lib_pg_val.empty?
-      # Get LEF USE property lines
-      lef_use_lines = lef_pin.properties.select do |prop_str|
-        prop_str.strip.upcase.start_with?("USE")
+    when "CLOCK"
+      puts "CHECKING Clock: #{cell} #{lib_pin.name} #{lib_pin_prop_key}"
+      lef_use_lines = lef_pin.properties.select do |l|
+        l.strip.upcase.start_with?("USE")
       end
-      if lef_use_lines.empty?
-        errors << "#{cell}\n\tPin #{lib_pin_name}: Missing LEF USE property for PG_TYPE\n"
-        return errors
+      return errors if lef_use_lines.empty?
+      lef_use = lef_use_lines.first.split[1].gsub(/[\";]/, "").strip.upcase
+      lib_val_normalized = lib_val.to_s.upcase.gsub(/[\";]/, "").strip
+      is_clock_in_lib = ["TRUE", "1"].include?(lib_val_normalized)
+      puts "DEBUG: lef_use='#{lef_use}', lib_val='#{lib_val}', lib_val_normalized='#{lib_val_normalized}', is_clock_in_lib=#{is_clock_in_lib}"
+      if is_clock_in_lib && lef_use != "CLOCK"
+        errors << "#{cell}\n\tPin #{pin_name}: CLOCK mismatch — LIB clock=true but LEF USE=#{lef_use}\n"
+      elsif !is_clock_in_lib && lef_use == "CLOCK"
+        errors << "#{cell}\n\tPin #{pin_name}: CLOCK mismatch — LIB clock=false but LEF USE=CLOCK\n"
       end
-      lef_use_val = lef_use_lines.first.split[1].gsub(/[\";]/, "").strip.upcase
-      # Cases:
-      case lib_pg_val
+    when "PG_TYPE"
+      lef_use_lines = lef_pin.properties.select do |l|
+        l.strip.upcase.start_with?("USE")
+      end
+      return errors if lef_use_lines.empty?
+      lef_use = lef_use_lines.first.split[1].gsub(/[\";]/, "").strip.upcase
+      case lib_val
       when "PRIMARY_POWER"
-        # Must be USE POWER
-        unless lef_use_val == "POWER"
-          puts "  ERROR: PG_TYPE mismatch LIB=PRIMARY_POWER LEF=#{lef_use_val}"
-          errors << "#{cell}\n\tPin #{lib_pin_name}: PG_TYPE mismatch — LIB PRIMARY_POWER but LEF USE=#{lef_use_val} (expected POWER)\n"
+        unless lef_use == "POWER"
+          errors << "#{cell}\n\tPin #{pin_name}: PG_TYPE mismatch — LIB=PRIMARY_POWER but LEF USE=#{lef_use} (expected POWER)\n"
         end
       when "PRIMARY_GROUND"
-        # Must be USE GROUND
-        unless lef_use_val == "GROUND"
-          puts "  ERROR: PG_TYPE mismatch LIB=PRIMARY_GROUND LEF=#{lef_use_val}"
-          errors << "#{cell}\n\tPin #{lib_pin_name}: PG_TYPE mismatch — LIB PRIMARY_GROUND but LEF USE=#{lef_use_val} (expected GROUND)\n"
-        end
-      else
-        # LIB pg_type IS NOT primary power/ground → LEF must NOT map to POWER or GROUND
-        if ["POWER", "GROUND"].include?(lef_use_val)
-          puts "  ERROR: Non-power pin mapped to power/ground in LEF"
-          errors << "#{cell}\n\tPin #{lib_pin_name}: PG_TYPE mismatch — LIB non-power pin but LEF USE=#{lef_use_val}\n"
-        end
-      end
-=end
-    elsif lib_pin_prop_key.upcase == "CLOCK" 
-
-        # normalize Liberty clock value
-        lib_clock_val = lib_pin.property("clock")
-        lib_clock_val = lib_clock_val.to_s.gsub(/[\";]/, "").strip.upcase
-        lib_clock_val = "FALSE" if lib_clock_val.empty?
-
-        # find USE in LEF
-        lef_use_lines = lef_pin.properties.select do |prop_str|
-          prop_str.strip.upcase.start_with?("USE")
-        end
-
-        if lef_use_lines.empty?
-          errors << "#{cell}\n\tPin #{lib_pin_name}: Missing LEF USE property\n"
-          return errors
-        end
-
-        lef_use_val = lef_use_lines.first.split[1].gsub(/[\";]/, "").strip.upcase
-
-        if lib_clock_val == "TRUE"
-          # clock pins must be USE CLOCK or USE SIGNAL
-          valid_clock_uses = ["CLOCK", "SIGNAL"]
-          unless valid_clock_uses.include?(lef_use_val)
-            puts "  ERROR: CLOCK mismatch LIB=true LEF=#{lef_use_val}"
-            errors << "#{cell}\n\tPin #{lib_pin_name}: CLOCK mismatch — LIB clock:true but LEF USE=#{lef_use_val} (expected CLOCK or SIGNAL)\n"
-          end
-
-        else # lib_clock_val == "FALSE"
-          # clock:false → must NOT use clock
-          if lef_use_val == "CLOCK"
-            puts "  ERROR: CLOCK mismatch LIB=false but LEF=CLOCK"
-            errors << "#{cell}\n\tPin #{lib_pin_name}: CLOCK mismatch — LIB clock:false but LEF USE=CLOCK\n"
-          end
-        end
-    end
-    unless lef_pin_prop_str.empty?
-      lef_pin_val_str = lef_pin_prop_str.select{|prop_str| !(prop_str =~ lef_prop_val_re).nil?}
-      if lef_pin_val_str.empty?
-        errors << "#{cell}\n\tFiles: #{lib_path}, #{lef_path}, \n\tPin: #{lib_pin_name}, \n\tProperty: #{lef_prop_key}\n"
+        unless lef_use == "GROUND"
+          errors << "#{cell}\n\tPin #{pin_name}: PG_TYPE mismatch — LIB=PRIMARY_GROUND but LEF USE=#{lef_use} (expected GROUND)\n"
       end 
+    else
+       puts "entered else"
+      return errors
     end
 
-    return errors
+    else
+      # Unhandled property
+      return errors
+    end
+
+    errors
   end
 end
 
