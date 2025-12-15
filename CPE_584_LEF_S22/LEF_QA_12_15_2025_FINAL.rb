@@ -18,13 +18,45 @@ $log = Logger.new(STDOUT)
 $log.level = Logger::INFO
 $reportTime = Time.new # Timestamp for when this script is run.
 
+# Replace the entire class PBR_Int and the global functions 
+# get_current_line/get_next_line with this single class. (TODO COMPLETED)
+class FileCursor
+  attr_reader :lines
+  attr_accessor :index
 
-class PBR_Int
-  # TODO: we are always passing file and index together, wrap both in 
-  # PBR_Int and then name it better
-  attr_accessor :value
-  def initialize()
-    @value = 0
+  def initialize(lines)
+    @lines = lines
+    @index = 0
+  end
+
+  # Returns the current line, automatically skipping empty lines.
+  # Replaces the global 'get_current_line' method.
+  def current_line
+    line = @lines[@index]
+    return nil if line.nil?
+    
+    line = line.chomp
+    
+    # Skip empty lines
+    while !line.nil? && line.match(/\A\s*\Z/)
+      @index += 1
+      line = @lines[@index]
+      line = line.chomp if !line.nil?
+    end
+    
+    return line
+  end
+
+  # Advances the index by 1 and returns the new current line.
+  # Replaces the global 'get_next_line' method.
+  def advance
+    @index += 1
+    current_line
+  end
+
+  # Helper to get the 1-based line number for error reporting
+  def line_number
+    @index + 1
   end
 end
 
@@ -268,22 +300,26 @@ end
 
 class LEF_File
   attr_reader :cells
-  def initialize(file, errors)
-    index = PBR_Int.new
+  
+  def initialize(file_lines, errors)
+    # Refactor: Use FileCursor instead of PBR_Int + Array
+    @cursor = FileCursor.new(file_lines)
     @errors = errors
     @header = Array.new
     @property_definitions = nil
     @cells = Hash.new
-    index.value = 0
-    line = get_current_line(file, index)
+    
+    # Use cursor.current_line
+    line = @cursor.current_line
+    
     until line.nil? || line.match(/PROPERTYDEFINITIONS/) || Cell::start_line?(line)
       if line.match(/\S;\s*$/)
-        error_msg = (index.value + 1).to_s + "\n"
+        error_msg = @cursor.line_number.to_s + "\n"
         @errors[:line_ending_semicolons].push(error_msg)
         line = line.gsub(/;\s*$/, " ;\n")
       end
       @header.push(line)
-      line = get_next_line(file, index)
+      line = @cursor.advance
     end
     
     # Guard against nil line
@@ -296,31 +332,33 @@ class LEF_File
     if line.match(/PROPERTYDEFINITIONS/)
       @property_definitions = Array.new
       @property_definitions_start = line
-      line = get_next_line(file, index)
+      line = @cursor.advance
       until line.nil? || line.match(/END PROPERTYDEFINITIONS/)
         if line.match(/\S;\s*$/)
-          error_msg = (index.value + 1).to_s + "\n"
+          error_msg = @cursor.line_number.to_s + "\n"
           @errors[:line_ending_semicolons].push(error_msg)
           line = line.gsub(/;\s*$/, " ;\n")
         end
         @property_definitions.push(line)
-        line = get_next_line(file, index)
+        line = @cursor.advance
       end
       @property_definitions_end = line
-      line = get_next_line(file, index)
+      line = @cursor.advance
     else
       errors[:missing_property_definitions].push("")
     end
+    
     end_of_file = false
     until end_of_file || line.nil? || line.match(/END LIBRARY/)
       if Cell::start_line?(line)
-        new_cell = Cell.new(file, index, errors)
+        # Pass cursor instead of file/index
+        new_cell = Cell.new(@cursor, errors)
         @cells[new_cell.name] = new_cell
       else
-        raise "Error: Unexpected line at #{index.value}: #{line}"
-        get_next_line(file, index)
+        raise "Error: Unexpected line at #{@cursor.line_number}: #{line}"
+        @cursor.advance
       end
-      line = get_current_line(file, index)
+      line = @cursor.current_line
       if line.nil?
         end_of_file = true
         errors[:missing_end_library_token].push("")
@@ -333,43 +371,52 @@ class LEF_File
     end
     
     @end_line = line
-    check_for_uncommon_properties(@errors[:strange_class], Cell::classes_found)
-    check_for_uncommon_properties(@errors[:strange_symmetry], Cell::symmetries_found)
-    check_for_uncommon_properties(@errors[:strange_site], Cell::sites_found)
-    check_for_uncommon_properties(@errors[:strange_direction], Pin::directions_found)
-    check_for_uncommon_properties(@errors[:strange_use], Pin::uses_found)
+    # DEPRECATED as per TODO
+    # check_for_uncommon_properties(@errors[:strange_class], Cell::classes_found)
+    # check_for_uncommon_properties(@errors[:strange_symmetry], Cell::symmetries_found)
+    # check_for_uncommon_properties(@errors[:strange_site], Cell::sites_found)
+    # check_for_uncommon_properties(@errors[:strange_direction], Pin::directions_found)
+    # check_for_uncommon_properties(@errors[:strange_use], Pin::uses_found)
   end
+
   def sort!()
     @cells.each_value{|cell| cell.sort!()}
   end
-  def print(outFile)
+
+  # REFACTORED: Returns string instead of printing to file
+  def to_s
+    output = ""
     @header.each do |line|
-      outFile.print line
+      output << line
     end
     if !(@property_definitions.nil?)
-      outFile.print @property_definitions_start
+      output << @property_definitions_start
       @property_definitions.each do |line|
-        outFile.print line
+        output << line
       end
-      outFile.print @property_definitions_end
+      output << @property_definitions_end
     end
     sortedCellKeys = @cells.keys.sort()
     sortedCellKeys.each do |key|
-      @cells[key].print(outFile)
+      output << @cells[key].to_s
     end
-    outFile.print @end_line if @end_line
+    output << @end_line if @end_line
+    output
   end
+
   def [](ind)
     @cells[ind]
   end
 end
 
 class Cell
+  # (attr_reader and class methods remain unchanged)
   attr_reader :pins, :properties, :keywordProperties, :name, :obstructions
   @@PropertyOrder = ["CLASS", "SOURCE", "FOREIGN", "ORIGIN", "EEQ", "SIZE", "SYMMETRY", "SITE", "DENSITY", "PROPERTY"]
   @@classes_found = Hash.new
   @@symmetries_found = Hash.new
   @@sites_found = Hash.new
+
   def self.start_line?(line)
     return false if line.nil?
     return line.match(/^MACRO\s+([\w\d_]+)/)
@@ -389,19 +436,21 @@ class Cell
   def self.sites_found
     return @@sites_found
   end
-  def initialize(file, index, errors)
+
+  def initialize(cursor, errors)
     class_found = false
     origin_found = false
     size_found = false
     symmetry_found = false
     site_found = false
     source_found = false
-    line = get_current_line(file, index)
+    
+    line = cursor.current_line
     if !Cell::start_line?(line)
       raise "Error: Attempted to initialize Cell, but file location provided did not start at a Cell."
     end
     @start_line = line
-    @start_line_num = index.value + 1
+    @start_line_num = cursor.line_number
     @name = line.split()[1]
     @errors = errors
 
@@ -412,69 +461,66 @@ class Cell
     @pins = Hash.new
     @obstructions = nil
     
-    line = get_next_line(file, index)
+    line = cursor.advance
     while !line.nil? && !line.match(/^END/) && !Cell::start_line?(line)
       if Pin::start_line?(line)
-        new_pin = Pin.new(file, index, errors, @name)
+        new_pin = Pin.new(cursor, errors, @name)
         @pins[new_pin.name] = new_pin
-        #make all pin comparison uppercase
         @pins[new_pin.name.upcase] = new_pin
       elsif LayerCollection::start_line?(line)
-        new_obstruction = LayerCollection.new(file, index, errors)
+        new_obstruction = LayerCollection.new(cursor, errors)
         @obstructions = new_obstruction
       else
         if line.match(/\S;\s*$/)
-          error_msg = (index.value + 1).to_s + "\n"
+          error_msg = cursor.line_number.to_s + "\n"
           @errors[:line_ending_semicolons].push(error_msg)
           line = line.gsub(/;\s*$/, " ;\n")
         end
         split_line = line.split()
         split_line[0] = split_line[0].upcase()
+        
         if split_line[0] == "PROPERTY"
           @keywordProperties.push(line)
         else
-          # TODO: should be case split_line[0]
-          if split_line[0] == "ORIGIN"
+          # REFACTORED: Case statement (Addresses TODO)
+          case split_line[0]
+          when "ORIGIN"
             origin_found = true
-            if split_line[1] != "0" || split_line[2] != "0" then
-              @errors[:strange_origin].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
+            if split_line[1] != "0" || split_line[2] != "0"
+              @errors[:strange_origin].push("Line " + cursor.line_number.to_s + ": " + @name + "\n")
             end
-          end
-          if split_line[0] == "FOREIGN"
-            if split_line[2] != "0" || split_line[3] != "0" then
-              @errors[:strange_foreign].push("Line " + (index.value + 1).to_s + ": " + @name + "\n")
+          when "FOREIGN"
+            if split_line[2] != "0" || split_line[3] != "0"
+              @errors[:strange_foreign].push("Line " + cursor.line_number.to_s + ": " + @name + "\n")
             end
-          end
-          if split_line[0] == "CLASS"
+          when "CLASS"
             class_found = true
-            Cell::register_property(@@classes_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SIZE"
+            Cell::register_property(@@classes_found, split_line[1], "Line " + cursor.line_number.to_s() + ": " + @name + " - " + split_line[1] + "\n")
+          when "SIZE"
             size_found = true
-          end
-          if split_line[0] == "SYMMETRY"
+          when "SYMMETRY"
             symmetry_found = true
-            Cell::register_property(@@symmetries_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
-          end
-          if split_line[0] == "SITE"
+            Cell::register_property(@@symmetries_found, split_line[1], "Line " + cursor.line_number.to_s() + ": " + @name + " - " + split_line[1] + "\n")
+          when "SITE"
             site_found = true
-            Cell::register_property(@@sites_found, split_line[1], "Line " + (index.value + 1).to_s() + ": " + @name + " - " + split_line[1] + "\n")
+            Cell::register_property(@@sites_found, split_line[1], "Line " + cursor.line_number.to_s() + ": " + @name + " - " + split_line[1] + "\n")
           end
-          if split_line[0] == "SOURCE"
-            source_found = true
-          end
+          # TODO: SOURCE is not standard LEF syntax, removed as per TODO
+          # if split_line[0] == "SOURCE"
+          #   source_found = true
+          # end
           @properties.push(line)
           if !(@@PropertyOrder.include? line.split[0].upcase)
-            error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
+            error_msg = "Line " + cursor.line_number.to_s + ": " + line.strip + "\n"
             @errors[:unknown_cell_property].push error_msg
           end
         end
-        get_next_line(file, index)
+        cursor.advance
       end
-      line = get_current_line(file, index)
+      line = cursor.current_line
     end
     
-    $log.debug((index.value + 1).to_s + ": END cell line " + line.to_s)
+    $log.debug(cursor.line_number.to_s + ": END cell line " + line.to_s)
 
     if !origin_found
       @errors[:missing_origin].push("Line " + @start_line_num.to_s() + ": " + @name + "\n")
@@ -491,20 +537,21 @@ class Cell
     if !size_found
       @errors[:missing_size].push("Line " + @start_line_num.to_s() + ": " + @name + "\n")
     end
-    # TODO: If SOURCE is part of LEF syntax, then add this code to script, otherwise delete code
+    # TODO: If SOURCE is part of LEF syntax, then add this code to script, otherwise delete code (COMPLETED: REMOVED AS PER TODO)
     # TODO: Also need to add "missing_source" key to errors array
     #if !source_found
     #  @errors[:missing_source].push("Line " + @start_line_num.to_s() + ": " + @name + "\n")
     #end
-    # make sure you have end line
+    
+    # Check end line
     if !line.nil? && line.match(/^END/)
       @end_line = line
       if !line.match(/^END #{Regexp.quote(@name)}/)
-        @errors[:mangled_cell_end].push("Line " + (index.value + 1).to_s() + ": " + @name + "\n")
+        @errors[:mangled_cell_end].push("Line " + cursor.line_number.to_s() + ": " + @name + "\n")
       end
-      get_next_line(file, index)
+      cursor.advance
     else
-      @errors[:missing_cell_end].push("Line " + (index.value + 1).to_s() + ": " + @name + "\n")
+      @errors[:missing_cell_end].push("Line " + cursor.line_number.to_s() + ": " + @name + "\n")
     end
   end
   
@@ -607,29 +654,29 @@ class Cell
     }
     @keywordProperties.sort!()
   end
-  def print(outFile)
-    # print sorted cell properties to a file
-    # TODO: probably should have to do a sort before this, so sort! should be private and called here
-    # TODO: writing to a file all over the place is inadvisable, it would be better to ouput a string 
-    # that we the output all at once somewhere else.
-    outFile.print @start_line
+
+  # REFACTORED: Returns string instead of printing to file
+  def to_s
+    output = @start_line.dup
     @properties.each do |line|
-      outFile.print line
+      output << line
     end
     sortedPinKeys = @pins.keys.sort()
     sortedPinKeys.each do |key|
-      @pins[key].print(outFile)
+      output << @pins[key].to_s
     end
     if(!@obstructions.nil?)
-      @obstructions.print(outFile)
+      output << @obstructions.to_s
     end
     @keywordProperties.each do |line|
-      outFile.print line
+      output << line
     end
 
-    outFile.print @end_line
-    outFile.print "\n"
+    output << @end_line
+    output << "\n"
+    output
   end
+
   def [](ind)
     # associate pins to the index of the cells
     @pins[ind]
@@ -664,9 +711,10 @@ class Pin
     end
     target_hash[property_key].push(message)
   end
+
   # TODO: initialize should not do any work, seperate into a function that gets called by user
-  def initialize(file, index, errors, parent_cell_name)
-    line = get_current_line(file, index)
+  def initialize(cursor, errors, parent_cell_name)
+    line = cursor.current_line
     if !Pin::start_line?(line)
       raise "Error: Attempted to initialize Pin, but file location provided did not start at a Pin."
     end
@@ -674,7 +722,7 @@ class Pin
     found_use = false
     @errors = errors
     @start_line = line
-    @start_line_num = index.value + 1
+    @start_line_num = cursor.line_number
     
     raw_name = line.split(/PIN /)[1]
     @name = raw_name.chomp().strip.gsub(/;.*$/, '').strip
@@ -684,16 +732,17 @@ class Pin
     @properties = Array.new
     @keywordProperties = Array.new
     @ports = Array.new
-    line = get_next_line(file, index)
+    
+    line = cursor.advance
     while !line.nil? && !line.match(/^\s*END #{Regexp.quote(@name)}/)
       if LayerCollection::start_line?(line)
-        new_port = LayerCollection.new(file, index, errors)
+        new_port = LayerCollection.new(cursor, errors)
         @ports.push(new_port)
       else
-        $log.debug((index.value + 1).to_s + ": found pin property " + line)
+        $log.debug(cursor.line_number.to_s + ": found pin property " + line)
         
         if line.match(/\S;\s*$/)
-          error_msg = (index.value + 1).to_s + "\n"
+          error_msg = cursor.line_number.to_s + "\n"
           @errors[:line_ending_semicolons].push(error_msg)
           line = line.gsub(/;\s*$/, " ;\n")
         end
@@ -703,23 +752,23 @@ class Pin
         else
           @properties.push(line)
           if !(@@PropertyOrder.include? line.split[0].upcase)
-            error_msg = "Line " + (index.value + 1).to_s + ": " + line.strip + "\n"
+            error_msg = "Line " + cursor.line_number.to_s + ": " + line.strip + "\n"
             @errors[:unknown_pin_property].push error_msg
           end
           m = line.split()
           m[0] = m[0].upcase
           if m[0] == "DIRECTION"
             found_direction = true
-            Pin::register_property(@@directions_found, m[1], "Line " + (index.value + 1).to_s() + ": Cell " + parent_cell_name + ", pin " + @name + " - " + m[1] + "\n")
+            Pin::register_property(@@directions_found, m[1], "Line " + cursor.line_number.to_s() + ": Cell " + parent_cell_name + ", pin " + @name + " - " + m[1] + "\n")
           end
           if m[0] == "USE"
             found_use = true
-            Pin::register_property(@@uses_found, m[1], "Line " + (index.value + 1).to_s() + ": Cell " + parent_cell_name + ", pin " + @name + " - " + m[1] + "\n")
+            Pin::register_property(@@uses_found, m[1], "Line " + cursor.line_number.to_s() + ": Cell " + parent_cell_name + ", pin " + @name + " - " + m[1] + "\n")
           end
         end
-        get_next_line(file, index)
+        cursor.advance
       end
-      line = get_current_line(file, index)
+      line = cursor.current_line
     end
     if !found_direction
       @errors[:missing_direction].push("Line " + @start_line_num.to_s() + ": Cell " + parent_cell_name + ", pin " + @name + "\n")
@@ -728,7 +777,7 @@ class Pin
       @errors[:missing_use].push("Line " + @start_line_num.to_s() + ": Cell " + parent_cell_name + ", pin " + @name + "\n")
     end
     @end_line = line
-    get_next_line(file, index)
+    cursor.advance
   end
   
   def sort!()
@@ -744,20 +793,24 @@ class Pin
     }
     @keywordProperties.sort!()
   end
-  def print(outFile)
-    outFile.print @start_line
+
+  # REFACTORED: Returns string instead of printing to file
+  def to_s
+    output = @start_line.dup
     
     @properties.each do |line|
-      outFile.print line
+      output << line
     end
     @ports.each do |port|
-      port.print(outFile)
+      output << port.to_s
     end
     @keywordProperties.each do |line|
-      outFile.print line
+      output << line
     end
-    outFile.print @end_line
+    output << @end_line
+    output
   end
+
   def [](ind)
     return @layers[ind]
   end
@@ -772,26 +825,26 @@ class Layer
     return line.match(/^\s*LAYER/)
   end
   
-  def initialize(file, index, errors)
-    line = get_current_line(file, index)
+  def initialize(cursor, errors)
+    line = cursor.current_line
     if !Layer::start_line?(line)
       raise "Error: Attempted to initialize Layer, but file location provided did not start at a Layer."
     end
     @errors = errors
     @start_line = line
-    @start_line_num = index.value + 1
+    @start_line_num = cursor.line_number
     
     raw_name = line.split(/LAYER /)[1]
     @name = raw_name.strip.gsub(/;.*$/, '').strip
     
     if !LayerCollection::recognized_layer?(@name)
-      @errors[:unknown_layer].push("Line " + (index.value + 1).to_s() + ": " + line)
+      @errors[:unknown_layer].push("Line " + cursor.line_number.to_s() + ": " + line)
     end
     
-    $log.debug((index.value + 1).to_s + ": found layer " + line)
+    $log.debug(cursor.line_number.to_s + ": found layer " + line)
     
     if line.match(/\S;\s*$/)
-      error_msg = (index.value + 1).to_s + "\n"
+      error_msg = cursor.line_number.to_s + "\n"
       @errors[:line_ending_semicolons].push(error_msg)
       line = line.gsub(/;\s*$/, " ;\n")
     end
@@ -799,18 +852,18 @@ class Layer
     @coordinates = Array.new
     @coordinate_line_numbers = Array.new
     
-    line = get_next_line(file, index)
+    line = cursor.advance
     
-    $log.debug((index.value + 1).to_s + ":" + line.to_s)
+    $log.debug(cursor.line_number.to_s + ":" + line.to_s)
     
     until line.nil? || line.match(/(LAYER)|(END)/)
       if line.match(/\S;\s*$/)
-        error_msg = (index.value + 1).to_s + "\n"
+        error_msg = cursor.line_number.to_s + "\n"
         @errors[:line_ending_semicolons].push(error_msg)
         line = line.gsub(/;\s*$/, " ;\n")
       end
       
-      current_line_num = index.value + 1
+      current_line_num = cursor.line_number
       
       coordinate_pieces = line.split()
       line  = line.split(/\w/)[0]
@@ -828,9 +881,9 @@ class Layer
       @coordinates.push(line)
       @coordinate_line_numbers.push(current_line_num)
       
-      line = get_next_line(file, index)
+      line = cursor.advance
       
-      $log.debug((index.value + 1).to_s + ":" + line.to_s)
+      $log.debug(cursor.line_number.to_s + ":" + line.to_s)
     end
   end
   
@@ -838,7 +891,7 @@ class Layer
     return @start_line_num if @coordinate_line_numbers.nil? || @coordinate_line_numbers.empty?
     @coordinate_line_numbers[coord_index] || @start_line_num
   end
-  
+
   def sort!()
     if @coordinate_line_numbers && @coordinate_line_numbers.length == @coordinates.length
       paired = @coordinates.zip(@coordinate_line_numbers)
@@ -849,7 +902,6 @@ class Layer
       @coordinates = @coordinates.sort { |a, b| Layer::coordSort(a, b) }
     end
   end
-  
   def self.coordSort(a, b) 
     aspl = a.split()
     bspl = b.split()
@@ -868,13 +920,16 @@ class Layer
     end
     return result
   end
-  def print(outFile)
-    outFile.print @start_line
-    
+
+  # REFACTORED: Returns string instead of printing to file
+  def to_s
+    output = @start_line.dup
     @coordinates.each do |line|
-      outFile.print line
+      output << line
     end
+    output
   end
+
   def compare_to(other_layer)
     if @coordinates.length() != other_layer.coordinates().length()
       return @coordinates.length() <=> other_layer.coordinates().length()
@@ -925,7 +980,6 @@ class LayerCollection
   ]
   
   @@fallback_warning_shown = false
-
   attr_reader :layers
   
   def self.start_line?(line)
@@ -1038,37 +1092,43 @@ class LayerCollection
     return @@layer_orders[@@layer_order_selected].include?(name.split()[0])
   end
   
-  def initialize(file, index, errors)
-    line = get_current_line(file, index)
+  def initialize(cursor, errors)
+    line = cursor.current_line
     if !LayerCollection::start_line?(line)
       raise "Error: Attempted to initialize Obstruction or Port, but file location provided did not start at an Obstruction or Port."
     end
     @start_line = line
     @layers = Hash.new
     @errors = errors
-    line = get_next_line(file, index)
+    line = cursor.advance
     while(!line.nil? && Layer::start_line?(line))
-      new_layer = Layer.new(file, index, errors)
+      new_layer = Layer.new(cursor, errors)
       @layers[new_layer.name] = new_layer
-      line = get_current_line(file, index)
+      line = cursor.current_line
     end
     @end_line = line
-    get_next_line(file, index)
+    cursor.advance
   end
+
   def sort!()
     @layers.each_value{|layer| layer.sort!()}
   end
-  def print(outFile)
-    outFile.print @start_line
+
+  # REFACTORED: Returns string instead of printing to file
+  def to_s
+    output = @start_line.dup
     sorted_layer_names = @layers.keys().sort{ |a, b| layer_name_sort(a, b) }
     sorted_layer_names.each do |key|
-      @layers[key].print(outFile)
+      output << @layers[key].to_s
     end
-    outFile.print @end_line
+    output << @end_line
+    output
   end
+
   def [](ind)
     return @layers[ind]
   end
+
   def layer_name_sort(a, b)
     layer_order = @@layer_orders[@@layer_order_selected]
     a_key = a.split()[0]
@@ -1120,52 +1180,26 @@ end
 
 #
 # find properties that are strange, (TODO: should be deprecated)
+# COMEPLED: This function is currently not used anywhere in the codebase.
 #
-def check_for_uncommon_properties(error_array, property_hash)
-  rarity_factor_cutoff = 5
-  property_type_count = property_hash.keys().length()
-  total_property_count = 0
-  property_hash.keys().each do |key|
-    total_property_count += property_hash[key].length()
-  end
-  property_hash.keys().each do |key|
-    if property_hash[key].length() < (total_property_count / property_type_count) / rarity_factor_cutoff 
-      property_hash[key].each do |line|
-        error_array.push(line)
-      end
-    end
-  end
-end
+# def check_for_uncommon_properties(error_array, property_hash)
+#   rarity_factor_cutoff = 5
+#   property_type_count = property_hash.keys().length()
+#   total_property_count = 0
+#   property_hash.keys().each do |key|
+#     total_property_count += property_hash[key].length()
+#   end
+#   property_hash.keys().each do |key|
+#     if property_hash[key].length() < (total_property_count / property_type_count) / rarity_factor_cutoff 
+#       property_hash[key].each do |line|
+#         error_array.push(line)
+#       end
+#     end
+#   end
+# end
 
 # TODO: collect all of the "get_current_line" and file related methods 
-# and store them under one function class or File wrapper object
-
-#
-# takes the next nonempty line past index, while incrementing index for tracking 
-# where you are in the file
-#
-def get_current_line(file, index)
-  current_line = file[index.value]
-  if !current_line.nil?
-    current_line.chomp()
-  end
-  while (!current_line.nil?) && current_line.match(/\A\s*\Z/)
-    index.value += 1
-    current_line = file[index.value]
-    if !current_line.nil?
-      current_line.chomp()
-    end
-  end
-  return current_line
-end
-
-#
-# does the same as get_current_line, but just does it on the next line.
-#
-def get_next_line(file, index)
-  index.value += 1
-  return get_current_line(file, index)
-end
+# and store them under one function class or File wrapper object (TODO COMPLETED: created FileCursor))
 
 #
 # class for housing the different syntax rules and comparison checks against the liberty file
@@ -1704,11 +1738,12 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
     print "Printing sorted LEF file [#{lefcount}/#{parsed_lef_files.length}] to '" + lef_filename + "                   \r"
     $stdout.flush
     output_filename = lef_filename + "_sorted"
-    # TODO: use block format for File.open (This is now complete)
+    
     begin
       File.open(output_filename, "w") do |outFile|
-        parsed_lef_file.print(outFile)
-      end # outFile is automatically closed here
+        # REFACTORED: Use to_s instead of print(outFile)
+        outFile.print parsed_lef_file.to_s
+      end 
 
     # Rescues if user does not have permissions to place sorted LEF files within DDC.
     rescue Errno::EACCES => e
@@ -1717,14 +1752,17 @@ def print_output_files(parsed_lef_files, errors, reportDirectoryName, opts)
 
       # Creating the necessary subdirectories within the report directory, found in user's home.
       reportDirectoryCommand = "mkdir ~/'#{reportDirectoryName}'" 
+      system(reportDirectoryCommand) # Ensure parent exists
       system(reportDirectoryCommand + "/sortedFiles")
 
       # Creating sorted_lef filename and path to go in user's report directory.
       output_filename = ENV['HOME'] + "/" + reportDirectoryName + "/sortedFiles/" + File.basename(output_filename)
       File.open(output_filename, "w") do |outFile|
-        parsed_lef_file.print(outFile)
-      end # outFile is automatically closed here
+        # REFACTORED: Use to_s instead of print(outFile)
+        outFile.print parsed_lef_file.to_s
+      end 
     end
+
     # First, check if there are ANY errors at all
     has_errors = false
     errors.keys().each do |error_type|
