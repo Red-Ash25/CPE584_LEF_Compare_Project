@@ -298,6 +298,14 @@ class TLEF_File
   end
 end
 
+# Helper to normalize/strip a line and ensure it ends with newline
+def normalize_line(line, indent = "")
+  return "" if line.nil?
+  stripped = line.to_s.strip
+  return "" if stripped.empty?
+  "#{indent}#{stripped}\n"
+end
+
 class LEF_File
   attr_reader :cells
   
@@ -383,24 +391,24 @@ class LEF_File
     @cells.each_value{|cell| cell.sort!()}
   end
 
-  # REFACTORED: Returns string instead of printing to file
+  # REFACTORED: Returns string with proper formatting
   def to_s
     output = ""
     @header.each do |line|
-      output << line
+      output << normalize_line(line)
     end
     if !(@property_definitions.nil?)
-      output << @property_definitions_start
+      output << normalize_line(@property_definitions_start)
       @property_definitions.each do |line|
-        output << line
+        output << normalize_line(line, "  ")
       end
-      output << @property_definitions_end
+      output << normalize_line(@property_definitions_end)
     end
     sortedCellKeys = @cells.keys.sort()
     sortedCellKeys.each do |key|
       output << @cells[key].to_s
     end
-    output << @end_line if @end_line
+    output << normalize_line(@end_line) if @end_line
     output
   end
 
@@ -468,7 +476,7 @@ class Cell
         @pins[new_pin.name] = new_pin
         @pins[new_pin.name.upcase] = new_pin
       elsif LayerCollection::start_line?(line)
-        new_obstruction = LayerCollection.new(cursor, errors)
+        new_obstruction = LayerCollection.new(cursor, errors, :obs)
         @obstructions = new_obstruction
       else
         if line.match(/\S;\s*$/)
@@ -655,13 +663,14 @@ class Cell
     @keywordProperties.sort!()
   end
 
-  # REFACTORED: Returns string instead of printing to file
+  # REFACTORED: Returns string with proper formatting
   def to_s
-    output = @start_line.dup
+    output = ""
+    output << normalize_line(@start_line)
     @properties.each do |line|
-      output << line
+      output << normalize_line(line, "  ")
     end
-    sortedPinKeys = @pins.keys.sort()
+    sortedPinKeys = @pins.keys.sort().uniq { |k| k.upcase }
     sortedPinKeys.each do |key|
       output << @pins[key].to_s
     end
@@ -669,10 +678,10 @@ class Cell
       output << @obstructions.to_s
     end
     @keywordProperties.each do |line|
-      output << line
+      output << normalize_line(line, "  ")
     end
 
-    output << @end_line
+    output << normalize_line(@end_line)
     output << "\n"
     output
   end
@@ -736,7 +745,7 @@ class Pin
     line = cursor.advance
     while !line.nil? && !line.match(/^\s*END #{Regexp.quote(@name)}/)
       if LayerCollection::start_line?(line)
-        new_port = LayerCollection.new(cursor, errors)
+        new_port = LayerCollection.new(cursor, errors, :port)
         @ports.push(new_port)
       else
         $log.debug(cursor.line_number.to_s + ": found pin property " + line)
@@ -794,20 +803,21 @@ class Pin
     @keywordProperties.sort!()
   end
 
-  # REFACTORED: Returns string instead of printing to file
+  # REFACTORED: Returns string with proper formatting
   def to_s
-    output = @start_line.dup
+    output = ""
+    output << normalize_line(@start_line, "  ")
     
     @properties.each do |line|
-      output << line
+      output << normalize_line(line, "    ")
     end
     @ports.each do |port|
       output << port.to_s
     end
     @keywordProperties.each do |line|
-      output << line
+      output << normalize_line(line, "    ")
     end
-    output << @end_line
+    output << normalize_line(@end_line, "  ")
     output
   end
 
@@ -825,7 +835,8 @@ class Layer
     return line.match(/^\s*LAYER/)
   end
   
-  def initialize(cursor, errors)
+  def initialize(cursor, errors, indent_level = 6)
+    @indent_level = indent_level
     line = cursor.current_line
     if !Layer::start_line?(line)
       raise "Error: Attempted to initialize Layer, but file location provided did not start at a Layer."
@@ -866,19 +877,18 @@ class Layer
       current_line_num = cursor.line_number
       
       coordinate_pieces = line.split()
-      line  = line.split(/\w/)[0]
-      line += coordinate_pieces[0]
+      formatted_line = coordinate_pieces[0]
       for i in 1..4
         if coordinate_pieces[i] && !coordinate_pieces[i].match(/\.\d{#{@@coordinate_pad_precision + 1}}/)
           current_num = coordinate_pieces[i].to_f()
-          line += " " + "%.#{@@coordinate_pad_precision}f" % current_num
+          formatted_line += " " + "%.#{@@coordinate_pad_precision}f" % current_num
         elsif coordinate_pieces[i]
-          line += " " + coordinate_pieces[i]
+          formatted_line += " " + coordinate_pieces[i]
         end
       end
-      line += " ;\n"
+      formatted_line += " ;"
       
-      @coordinates.push(line)
+      @coordinates.push(formatted_line)
       @coordinate_line_numbers.push(current_line_num)
       
       line = cursor.advance
@@ -921,11 +931,13 @@ class Layer
     return result
   end
 
-  # REFACTORED: Returns string instead of printing to file
-  def to_s
-    output = @start_line.dup
+  # REFACTORED: Returns string with proper formatting
+  def to_s(base_indent = "      ")
+    output = ""
+    coord_indent = base_indent + "  "
+    output << "#{base_indent}#{@start_line.strip}\n"
     @coordinates.each do |line|
-      output << line
+      output << "#{coord_indent}#{line.strip}\n"
     end
     output
   end
@@ -1092,7 +1104,8 @@ class LayerCollection
     return @@layer_orders[@@layer_order_selected].include?(name.split()[0])
   end
   
-  def initialize(cursor, errors)
+  def initialize(cursor, errors, context = :port)
+    @context = context  # :port or :obs
     line = cursor.current_line
     if !LayerCollection::start_line?(line)
       raise "Error: Attempted to initialize Obstruction or Port, but file location provided did not start at an Obstruction or Port."
@@ -1100,6 +1113,12 @@ class LayerCollection
     @start_line = line
     @layers = Hash.new
     @errors = errors
+    
+    # Determine indentation based on context
+    @base_indent = (context == :obs) ? "  " : "    "
+    @layer_indent = (context == :obs) ? "    " : "      "
+    @coord_indent = (context == :obs) ? "      " : "        "
+    
     line = cursor.advance
     while(!line.nil? && Layer::start_line?(line))
       new_layer = Layer.new(cursor, errors)
@@ -1114,14 +1133,15 @@ class LayerCollection
     @layers.each_value{|layer| layer.sort!()}
   end
 
-  # REFACTORED: Returns string instead of printing to file
+  # REFACTORED: Returns string with proper formatting
   def to_s
-    output = @start_line.dup
+    output = ""
+    output << "#{@base_indent}#{@start_line.strip}\n"
     sorted_layer_names = @layers.keys().sort{ |a, b| layer_name_sort(a, b) }
     sorted_layer_names.each do |key|
-      output << @layers[key].to_s
+      output << @layers[key].to_s(@layer_indent)
     end
-    output << @end_line
+    output << "#{@base_indent}#{@end_line.strip}\n"
     output
   end
 
